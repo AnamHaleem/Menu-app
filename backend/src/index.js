@@ -27,9 +27,19 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong' });
 });
 
-app.listen(PORT, () => {
+const { exec } = require('child_process');
+
+app.listen(PORT, async () => {
   console.log(`Menu API running on port ${PORT}`);
+
+  // Run migrations automatically
+  exec('npm run db:migrate && npm run db:seed', (err, stdout, stderr) => {
+    if (err) {
+      console.error('Migration error:', err);
+      return;
+    }
+    console.log('Migrations + seed complete');
+  });
+
   startScheduler();
 });
-
-module.exports = app;
