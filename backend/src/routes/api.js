@@ -1,0 +1,364 @@
+const express = require('express');
+const router = express.Router();
+const pool = require('../db/pool');
+const forecastService = require('../services/forecastService');
+const weatherService = require('../services/weatherService');
+const emailService = require('../services/emailService');
+
+// ─── CAFES ────────────────────────────────────────────────────────────────────
+router.get('/cafes', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM cafes ORDER BY name');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/cafes/:id', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM cafes WHERE id = $1', [req.params.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Cafe not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/cafes', async (req, res) => {
+  const { name, owner_name, email, city, holiday_behaviour, kitchen_lead_email } = req.body;
+  try {
+    const result = await pool.query(`
+      INSERT INTO cafes (name, owner_name, email, city, holiday_behaviour, kitchen_lead_email)
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
+    `, [name, owner_name, email, city || 'Toronto', holiday_behaviour || 'Manual', kitchen_lead_email]);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/cafes/:id', async (req, res) => {
+  const { name, owner_name, email, city, holiday_behaviour, kitchen_lead_email, active } = req.body;
+  try {
+    const result = await pool.query(`
+      UPDATE cafes SET name=$1, owner_name=$2, email=$3, city=$4, holiday_behaviour=$5, kitchen_lead_email=$6, active=$7
+      WHERE id=$8 RETURNING *
+    `, [name, owner_name, email, city, holiday_behaviour, kitchen_lead_email, active, req.params.id]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ITEMS ────────────────────────────────────────────────────────────────────
+router.get('/cafes/:cafeId/items', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM items WHERE cafe_id = $1 ORDER BY category, name', [req.params.cafeId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/cafes/:cafeId/items', async (req, res) => {
+  const { name, category, price } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO items (cafe_id, name, category, price) VALUES ($1,$2,$3,$4) RETURNING *',
+      [req.params.cafeId, name, category, price]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/cafes/:cafeId/items/:id', async (req, res) => {
+  const { name, category, price, active } = req.body;
+  try {
+    const result = await pool.query(
+      'UPDATE items SET name=$1, category=$2, price=$3, active=$4 WHERE id=$5 AND cafe_id=$6 RETURNING *',
+      [name, category, price, active, req.params.id, req.params.cafeId]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── INGREDIENTS ──────────────────────────────────────────────────────────────
+router.get('/cafes/:cafeId/ingredients', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM ingredients WHERE cafe_id = $1 ORDER BY name', [req.params.cafeId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/cafes/:cafeId/ingredients', async (req, res) => {
+  const { name, unit, par_level, shelf_life_days, cost_per_unit } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO ingredients (cafe_id, name, unit, par_level, shelf_life_days, cost_per_unit) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+      [req.params.cafeId, name, unit, par_level || 0, shelf_life_days || 7, cost_per_unit || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── RECIPES ─────────────────────────────────────────────────────────────────
+router.get('/cafes/:cafeId/recipes', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT r.*, i.name as item_name, ing.name as ingredient_name, ing.unit
+      FROM recipes r
+      JOIN items i ON r.item_id = i.id
+      JOIN ingredients ing ON r.ingredient_id = ing.id
+      WHERE r.cafe_id = $1
+      ORDER BY i.name, ing.name
+    `, [req.params.cafeId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/cafes/:cafeId/recipes', async (req, res) => {
+  const { item_id, ingredient_id, qty_per_portion, station } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO recipes (cafe_id, item_id, ingredient_id, qty_per_portion, station) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+      [req.params.cafeId, item_id, ingredient_id, qty_per_portion, station]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
+router.get('/cafes/:cafeId/transactions', async (req, res) => {
+  const { days = 28 } = req.query;
+  try {
+    const result = await pool.query(`
+      SELECT * FROM transactions
+      WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '${parseInt(days)} days'
+      ORDER BY date DESC
+    `, [req.params.cafeId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/cafes/:cafeId/transactions/bulk', async (req, res) => {
+  const { transactions } = req.body;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const t of transactions) {
+      await client.query(`
+        INSERT INTO transactions (cafe_id, item_name, date, quantity, revenue, order_type, daypart)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `, [req.params.cafeId, t.item_name, t.date, t.quantity, t.revenue || 0, t.order_type || 'Dine-in', t.daypart || 'Morning']);
+    }
+    await client.query('COMMIT');
+    res.status(201).json({ imported: transactions.length });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ─── FORECAST & PREP LIST ─────────────────────────────────────────────────────
+router.get('/cafes/:cafeId/forecast', async (req, res) => {
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+  try {
+    const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId), date);
+    res.json(forecast);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/cafes/:cafeId/prep-list', async (req, res) => {
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+  try {
+    const result = await pool.query(`
+      SELECT * FROM prep_lists WHERE cafe_id = $1 AND date = $2 ORDER BY station, ingredient_name
+    `, [req.params.cafeId, date]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/cafes/:cafeId/prep-list/:prepId', async (req, res) => {
+  const { completed } = req.body;
+  try {
+    const result = await pool.query(
+      'UPDATE prep_lists SET completed = $1 WHERE id = $2 AND cafe_id = $3 RETURNING *',
+      [completed, req.params.prepId, req.params.cafeId]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/cafes/:cafeId/forecast/generate', async (req, res) => {
+  const date = req.body.date || new Date().toISOString().split('T')[0];
+  try {
+    const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId), date);
+    if (!forecast.closed) {
+      await forecastService.savePrepList(req.params.cafeId, date, forecast.prepList);
+    }
+    res.json(forecast);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── DAILY LOGS ───────────────────────────────────────────────────────────────
+router.get('/cafes/:cafeId/logs', async (req, res) => {
+  const { days = 30 } = req.query;
+  try {
+    const result = await pool.query(`
+      SELECT * FROM daily_logs
+      WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '${parseInt(days)} days'
+      ORDER BY date DESC
+    `, [req.params.cafeId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/cafes/:cafeId/logs', async (req, res) => {
+  const { date, waste_items, waste_value, items_86d, actual_covers, notes } = req.body;
+  try {
+    const result = await pool.query(`
+      INSERT INTO daily_logs (cafe_id, date, waste_items, waste_value, items_86d, actual_covers, notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (cafe_id, date) DO UPDATE SET
+        waste_items = EXCLUDED.waste_items, waste_value = EXCLUDED.waste_value,
+        items_86d = EXCLUDED.items_86d, actual_covers = EXCLUDED.actual_covers, notes = EXCLUDED.notes
+      RETURNING *
+    `, [req.params.cafeId, date, waste_items || 0, waste_value || 0, items_86d || 0, actual_covers || 0, notes || '']);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── METRICS ──────────────────────────────────────────────────────────────────
+router.get('/cafes/:cafeId/metrics', async (req, res) => {
+  const cafeId = req.params.cafeId;
+  try {
+    const totalLogs = await pool.query('SELECT COUNT(*) as days FROM daily_logs WHERE cafe_id = $1', [cafeId]);
+    const allTime = await pool.query(`
+      SELECT
+        SUM(waste_value) as total_waste,
+        SUM(items_86d) as total_86,
+        COUNT(*) as days,
+        AVG(actual_covers) as avg_covers
+      FROM daily_logs WHERE cafe_id = $1
+    `, [cafeId]);
+    const last30 = await pool.query(`
+      SELECT
+        SUM(waste_value) as waste_30,
+        SUM(items_86d) as incidents_86_30,
+        COUNT(*) as days_30
+      FROM daily_logs WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '30 days'
+    `, [cafeId]);
+    const last7 = await pool.query(`
+      SELECT
+        SUM(waste_value) as waste_7,
+        SUM(items_86d) as incidents_86_7,
+        COUNT(*) as days_7
+      FROM daily_logs WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '7 days'
+    `, [cafeId]);
+    const baseline = await pool.query(`
+      SELECT AVG(waste_value) as avg_waste
+      FROM daily_logs WHERE cafe_id = $1 ORDER BY date ASC LIMIT 7
+    `, [cafeId]);
+
+    const baselineWaste = parseFloat(baseline.rows[0]?.avg_waste || 0);
+    const totalWaste = parseFloat(allTime.rows[0]?.total_waste || 0);
+    const daysRunning = parseInt(totalLogs.rows[0]?.days || 0);
+    const labourSavedMins = daysRunning * 15;
+    const labourSaved$ = Math.round(labourSavedMins / 60 * 21 * 100) / 100;
+    const projectedWasteWithout = baselineWaste * daysRunning;
+    const wasteSaved = Math.max(0, projectedWasteWithout - totalWaste);
+    const totalSavings = wasteSaved + labourSaved$;
+    const annualised = daysRunning > 0 ? Math.round(totalSavings * (365 / daysRunning)) : 0;
+
+    const last30WasteAfter = parseFloat(last30.rows[0]?.waste_30 || 0);
+    const days30 = parseInt(last30.rows[0]?.days_30 || 1);
+    const avgDailyAfter = last30WasteAfter / days30;
+    const wasteReductionPct = baselineWaste > 0
+      ? Math.round(((baselineWaste - avgDailyAfter) / baselineWaste) * 100)
+      : 0;
+
+    res.json({
+      daysRunning,
+      allTime: {
+        wasteSaved: Math.round(wasteSaved * 100) / 100,
+        total86: parseInt(allTime.rows[0]?.total_86 || 0),
+        labourSaved$,
+        totalSavings: Math.round(totalSavings * 100) / 100,
+        annualised
+      },
+      last30: {
+        waste: last30WasteAfter,
+        incidents86: parseInt(last30.rows[0]?.incidents_86_30 || 0),
+        days: days30
+      },
+      last7: {
+        waste: parseFloat(last7.rows[0]?.waste_7 || 0),
+        incidents86: parseInt(last7.rows[0]?.incidents_86_7 || 0),
+        days: parseInt(last7.rows[0]?.days_7 || 0)
+      },
+      baseline: { avgDailyWaste: Math.round(baselineWaste * 100) / 100 },
+      avgDailyWasteAfter: Math.round(avgDailyAfter * 100) / 100,
+      wasteReductionPct,
+      forecastAccuracy: Math.max(0, 100 - Math.round((parseInt(last30.rows[0]?.incidents_86_30 || 0) / Math.max(days30, 1)) * 100))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── WEATHER ─────────────────────────────────────────────────────────────────
+router.get('/weather', async (req, res) => {
+  const city = req.query.city || 'Toronto';
+  try {
+    const weather = await weatherService.getWeather(city);
+    res.json(weather);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── SEND PREP LIST MANUALLY ──────────────────────────────────────────────────
+router.post('/cafes/:cafeId/send-prep-list', async (req, res) => {
+  const date = req.body.date || new Date().toISOString().split('T')[0];
+  try {
+    const cafeResult = await pool.query('SELECT * FROM cafes WHERE id = $1', [req.params.cafeId]);
+    if (!cafeResult.rows.length) return res.status(404).json({ error: 'Cafe not found' });
+    const cafe = cafeResult.rows[0];
+    const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId), date);
+    await emailService.sendPrepList(cafe, forecast);
+    res.json({ sent: true, to: cafe.kitchen_lead_email || cafe.email });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+module.exports = router;
