@@ -10,7 +10,7 @@
     "db:seed": "node src/db/seed.js"
   },
   "dependencies": {
-    "@clerk/clerk-sdk-node": "^4.13.0",
+    "@clerk/express": "^2.0.8",
     "axios": "^1.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",

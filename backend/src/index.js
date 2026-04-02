@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { clerkMiddleware } = require('@clerk/clerk-sdk-node');
+const { clerkMiddleware } = require('@clerk/express');
 const apiRoutes = require('./routes/api');
 const { startScheduler } = require('./services/schedulerService');
 
