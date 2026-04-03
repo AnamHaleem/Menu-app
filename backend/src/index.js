@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const { exec } = require('child_process');
 const { clerkMiddleware } = require('@clerk/express');
 const apiRoutes = require('./routes/api');
 const { startScheduler } = require('./services/schedulerService');
@@ -27,18 +28,18 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong' });
 });
 
-const { exec } = require('child_process');
-
 app.listen(PORT, () => {
   console.log(`Menu API running on port ${PORT}`);
 
   exec('npm run db:migrate && npm run db:seed', { cwd: __dirname + '/..' }, (err, stdout, stderr) => {
+    if (stdout) console.log(stdout);
+    if (stderr) console.error(stderr);
+
     if (err) {
-      console.error('Migration error:', err);
-      if (stderr) console.error(stderr);
+      console.error('Migration/seed command failed:', err.message || err);
       return;
     }
-    if (stdout) console.log(stdout);
+
     console.log('Migrations + seed complete');
   });
 

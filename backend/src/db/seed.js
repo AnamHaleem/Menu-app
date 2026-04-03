@@ -1,11 +1,19 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
 const seed = async () => {
-  const client = await pool.connect();
+  let client;
   try {
+    if (!process.env.DATABASE_URL) {
+      throw new Error('DATABASE_URL is not set');
+    }
+
+    client = await pool.connect();
     await client.query('BEGIN');
 
     // Seed demo cafe
@@ -31,15 +39,12 @@ const seed = async () => {
       ['Smoked Salmon Bagel', 'Food', 11.50]
     ];
 
-    const itemIds = {};
     for (const [name, category, price] of items) {
-      const res = await client.query(`
+      await client.query(`
         INSERT INTO items (cafe_id, name, category, price, active)
         VALUES ($1, $2, $3, $4, true)
-        ON CONFLICT DO NOTHING
-        RETURNING id, name;
+        ON CONFLICT DO NOTHING;
       `, [cafeId, name, category, price]);
-      if (res.rows[0]) itemIds[name] = res.rows[0].id;
     }
 
     // Seed ingredients
@@ -64,15 +69,12 @@ const seed = async () => {
       ['Capers', 'oz', 10, 30, 0, 0.25]
     ];
 
-    const ingredientIds = {};
     for (const [name, unit, par_level, shelf_life_days, current_stock, cost_per_unit] of ingredients) {
-      const res = await client.query(`
+      await client.query(`
         INSERT INTO ingredients (cafe_id, name, unit, par_level, shelf_life_days, current_stock, cost_per_unit)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT DO NOTHING
-        RETURNING id, name;
+        ON CONFLICT DO NOTHING;
       `, [cafeId, name, unit, par_level, shelf_life_days, current_stock, cost_per_unit]);
-      if (res.rows[0]) ingredientIds[name] = res.rows[0].id;
     }
 
     // Seed Ontario holidays
@@ -112,13 +114,17 @@ const seed = async () => {
     await client.query('COMMIT');
     console.log('Seed completed successfully for cafe ID:', cafeId);
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('Seed failed:', err);
+    if (client) {
+      await client.query('ROLLBACK').catch(() => {});
+    }
+    console.error('Seed failed:', err.message || err);
     throw err;
   } finally {
-    client.release();
-    pool.end();
+    if (client) client.release();
+    await pool.end();
   }
 };
 
-seed().catch(console.error);
+seed()
+  .then(() => process.exit(0))
+  .catch(() => process.exit(1));

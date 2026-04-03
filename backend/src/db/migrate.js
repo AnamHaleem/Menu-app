@@ -1,11 +1,19 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
 const migrate = async () => {
-  const client = await pool.connect();
+  let client;
   try {
+    if (!process.env.DATABASE_URL) {
+      throw new Error('DATABASE_URL is not set');
+    }
+
+    client = await pool.connect();
     await client.query('BEGIN');
 
     await client.query(`
@@ -129,13 +137,17 @@ const migrate = async () => {
     await client.query('COMMIT');
     console.log('Migration completed successfully');
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('Migration failed:', err);
+    if (client) {
+      await client.query('ROLLBACK').catch(() => {});
+    }
+    console.error('Migration failed:', err.message || err);
     throw err;
   } finally {
-    client.release();
-    pool.end();
+    if (client) client.release();
+    await pool.end();
   }
 };
 
-migrate().catch(console.error);
+migrate()
+  .then(() => process.exit(0))
+  .catch(() => process.exit(1));
