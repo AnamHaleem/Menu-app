@@ -111,6 +111,20 @@ const migrate = async () => {
       );
     `);
 
+    // Ensure ON CONFLICT (cafe_id, date) works for daily log upserts
+    await client.query(`
+      DELETE FROM daily_logs a
+      USING daily_logs b
+      WHERE a.id > b.id
+        AND a.cafe_id = b.cafe_id
+        AND a.date = b.date;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_logs_cafe_date
+      ON daily_logs (cafe_id, date);
+    `);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS holidays (
         id SERIAL PRIMARY KEY,
