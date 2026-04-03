@@ -9,24 +9,37 @@ const { startScheduler } = require('./services/schedulerService');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+const normalizeOrigin = (value = '') => value.trim().replace(/\/+$/, '');
+
 const configuredOrigins = (process.env.FRONTEND_URL || '')
   .split(',')
-  .map((v) => v.trim())
+  .map(normalizeOrigin)
   .filter(Boolean);
 
 const devOrigins = ['http://localhost:3000', 'http://localhost:5173'];
+const allowVercelPreviews = process.env.ALLOW_VERCEL_PREVIEWS === 'true';
+
 const allowedOrigins = process.env.NODE_ENV === 'production'
   ? (configuredOrigins.length ? configuredOrigins : ['https://your-menu-app.railway.app'])
   : Array.from(new Set([...devOrigins, ...configuredOrigins]));
 
 console.log('CORS allowed origins:', allowedOrigins.join(', '));
+console.log('CORS allow Vercel previews:', allowVercelPreviews ? 'true' : 'false');
 
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
 
-    return callback(new Error(`Not allowed by CORS: ${origin}`));
+    const normalizedOrigin = normalizeOrigin(origin);
+    const isConfigured = allowedOrigins.includes(normalizedOrigin);
+    const isVercelPreview = allowVercelPreviews && /^https:\/\/.*\.vercel\.app$/.test(normalizedOrigin);
+
+    if (isConfigured || isVercelPreview) {
+      return callback(null, true);
+    }
+
+    console.error(`CORS blocked origin: ${normalizedOrigin}`);
+    return callback(new Error(`Not allowed by CORS: ${normalizedOrigin}`));
   },
   credentials: true
 }));
