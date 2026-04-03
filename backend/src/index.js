@@ -29,17 +29,20 @@ app.use((err, req, res, next) => {
 
 const { exec } = require('child_process');
 
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`Menu API running on port ${PORT}`);
 
-  // Run migrations automatically
-  exec('npm run db:migrate && npm run db:seed', (err, stdout, stderr) => {
+  exec('npm run db:migrate && npm run db:seed', { cwd: __dirname + '/..' }, (err, stdout, stderr) => {
     if (err) {
       console.error('Migration error:', err);
+      if (stderr) console.error(stderr);
       return;
     }
+    if (stdout) console.log(stdout);
     console.log('Migrations + seed complete');
   });
 
   startScheduler();
 });
+
+module.exports = app;
