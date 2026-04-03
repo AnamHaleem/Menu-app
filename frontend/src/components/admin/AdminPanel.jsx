@@ -44,25 +44,42 @@ function CafeCard({ cafe, onSelect, selected }) {
 
 function AddCafeForm({ onSave, onCancel }) {
   const [form, setForm] = useState({
-    name: '', owner_name: '', email: '', city: 'Toronto',
-    holiday_behaviour: 'Manual', kitchen_lead_email: ''
+    name: "", owner_name: "", email: "", city: "Toronto",
+    holiday_behaviour: "Manual", kitchen_lead_email: ""
   });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   const handleSubmit = async () => {
-    await cafesApi.create(form);
-    onSave();
+    if (!form.name.trim() || !form.email.trim()) {
+      setError("Cafe name and owner email are required.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    try {
+      await cafesApi.create(form);
+      await onSave();
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setError(apiError || "Could not add cafe. Check backend FRONTEND_URL and try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <Card className="p-6 mb-6">
-      <p className="font-semibold text-gray-900 mb-4">Add new café</p>
+      <p className="font-semibold text-gray-900 mb-4">Add new cafe</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         {[
-          { key: 'name', label: 'Café name' },
-          { key: 'owner_name', label: 'Owner name' },
-          { key: 'email', label: 'Owner email' },
-          { key: 'kitchen_lead_email', label: 'Kitchen lead email' },
-          { key: 'city', label: 'City' }
+          { key: "name", label: "Cafe name" },
+          { key: "owner_name", label: "Owner name" },
+          { key: "email", label: "Owner email" },
+          { key: "kitchen_lead_email", label: "Kitchen lead email" },
+          { key: "city", label: "City" }
         ].map(({ key, label }) => (
           <div key={key}>
             <label className="block text-xs text-gray-400 mb-1">{label}</label>
@@ -87,9 +104,16 @@ function AddCafeForm({ onSave, onCancel }) {
           </select>
         </div>
       </div>
+
+      {error && (
+        <p className="text-sm text-red-600 mb-3">{error}</p>
+      )}
+
       <div className="flex gap-2">
-        <Button onClick={handleSubmit} size="sm">Add café</Button>
-        <Button variant="ghost" onClick={onCancel} size="sm">Cancel</Button>
+        <Button onClick={handleSubmit} size="sm" disabled={saving}>
+          {saving ? "Adding..." : "Add cafe"}
+        </Button>
+        <Button variant="ghost" onClick={onCancel} size="sm" disabled={saving}>Cancel</Button>
       </div>
     </Card>
   );
