@@ -6,10 +6,18 @@ import './index.css';
 
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+const app = (
   <React.StrictMode>
-    <ClerkProvider publishableKey={PUBLISHABLE_KEY}>
-      <App />
-    </ClerkProvider>
+    <App />
   </React.StrictMode>
+);
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  PUBLISHABLE_KEY ? (
+    <ClerkProvider publishableKey={PUBLISHABLE_KEY}>
+      {app}
+    </ClerkProvider>
+  ) : (
+    app
+  )
 );

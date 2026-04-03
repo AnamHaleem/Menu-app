@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { SignIn, SignedIn, SignedOut, useUser, UserButton } from '@clerk/clerk-react';
+import { SignIn, SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import OwnerDashboard from './components/dashboard/OwnerDashboard';
 import KitchenView from './components/kitchen/KitchenView';
 import AdminPanel from './components/admin/AdminPanel';
 import { cafesApi } from './lib/api';
-import { Spinner } from './components/shared';
+import { Spinner, Card, Button } from './components/shared';
 
-function Nav({ cafe }) {
+const clerkEnabled = Boolean(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+
+function Nav({ cafe, authEnabled }) {
   const links = [
     { to: '/dashboard', label: 'Dashboard' },
     { to: '/kitchen', label: 'Kitchen' },
@@ -21,6 +23,11 @@ function Nav({ cafe }) {
           <div className="flex items-center gap-2">
             <span className="text-lg font-semibold text-navy-900" style={{ color: '#1F4E79' }}>Menu</span>
             {cafe && <span className="hidden md:block text-xs text-gray-400 border-l border-gray-200 pl-3">{cafe.name}</span>}
+            {!authEnabled && (
+              <span className="hidden md:block text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                Guest Mode
+              </span>
+            )}
           </div>
           <div className="flex gap-1">
             {links.map(link => (
@@ -36,44 +43,75 @@ function Nav({ cafe }) {
             ))}
           </div>
         </div>
-        <UserButton afterSignOutUrl="/" />
+
+        {authEnabled ? (
+          <UserButton afterSignOutUrl="/" />
+        ) : (
+          <span className="text-xs text-gray-400">No auth configured</span>
+        )}
       </div>
     </nav>
   );
 }
 
-function AppContent() {
-  const { user } = useUser();
+function NoCafeState() {
+  return (
+    <div className="p-4 md:p-6 max-w-4xl mx-auto">
+      <Card className="p-8 text-center">
+        <h2 className="text-xl font-semibold text-gray-900 mb-2">No cafe found yet</h2>
+        <p className="text-sm text-gray-500 mb-5">
+          Add your first cafe in Admin to start generating prep lists and forecasts.
+        </p>
+        <Button onClick={() => { window.location.href = '/admin'; }}>
+          Go to Admin
+        </Button>
+      </Card>
+    </div>
+  );
+}
+
+function AppContent({ authEnabled }) {
   const [cafe, setCafe] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    cafesApi.getAll().then(cafes => {
-      if (cafes.length > 0) setCafe(cafes[0]);
-    }).catch(() => {}).finally(() => setLoading(false));
+    cafesApi.getAll()
+      .then(cafes => {
+        if (cafes.length > 0) setCafe(cafes[0]);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return (
-    <div className="min-h-screen flex items-center justify-center">
-      <Spinner />
-    </div>
-  );
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Spinner />
+      </div>
+    );
+  }
 
   return (
     <Router>
-      <Nav cafe={cafe} />
+      <Nav cafe={cafe} authEnabled={authEnabled} />
       <main className="min-h-screen bg-gray-50">
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={
-            <OwnerDashboard cafeId={cafe?.id} cafeName={cafe?.name || 'Your Café'} />
-          } />
-          <Route path="/kitchen" element={
-            <KitchenView cafeId={cafe?.id} cafeName={cafe?.name || 'Your Café'} />
-          } />
-          <Route path="/admin" element={<AdminPanel />} />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
+        {!cafe ? (
+          <NoCafeState />
+        ) : (
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route
+              path="/dashboard"
+              element={<OwnerDashboard cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} />}
+            />
+            <Route
+              path="/kitchen"
+              element={<KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} />}
+            />
+            <Route path="/admin" element={<AdminPanel />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        )}
       </main>
     </Router>
   );
@@ -84,7 +122,7 @@ function LoginPage() {
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
       <div className="mb-8 text-center">
         <h1 className="text-3xl font-semibold text-gray-900" style={{ color: '#1F4E79' }}>Menu</h1>
-        <p className="text-sm text-gray-400 mt-1">Café operations intelligence</p>
+        <p className="text-sm text-gray-400 mt-1">Cafe operations intelligence</p>
       </div>
       <SignIn routing="hash" />
     </div>
@@ -92,13 +130,17 @@ function LoginPage() {
 }
 
 export default function App() {
+  if (!clerkEnabled) {
+    return <AppContent authEnabled={false} />;
+  }
+
   return (
     <>
       <SignedOut>
         <LoginPage />
       </SignedOut>
       <SignedIn>
-        <AppContent />
+        <AppContent authEnabled />
       </SignedIn>
     </>
   );
