@@ -16,8 +16,10 @@ const api = axios.create({
   withCredentials: true
 });
 
+const toArray = (value) => (Array.isArray(value) ? value : []);
+
 export const cafesApi = {
-  getAll: () => api.get('/cafes').then(r => r.data),
+  getAll: () => api.get('/cafes').then(r => toArray(r.data)),
   getOne: (id) => api.get(`/cafes/${id}`).then(r => r.data),
   create: (data) => api.post('/cafes', data).then(r => r.data),
   update: (id, data) => api.put(`/cafes/${id}`, data).then(r => r.data)
@@ -30,7 +32,7 @@ export const forecastApi = {
 };
 
 export const prepListApi = {
-  get: (cafeId, date) => api.get(`/cafes/${cafeId}/prep-list`, { params: { date } }).then(r => r.data),
+  get: (cafeId, date) => api.get(`/cafes/${cafeId}/prep-list`, { params: { date } }).then(r => toArray(r.data)),
   toggle: (cafeId, prepId, completed) => api.patch(`/cafes/${cafeId}/prep-list/${prepId}`, { completed }).then(r => r.data)
 };
 
@@ -39,23 +41,23 @@ export const metricsApi = {
 };
 
 export const logsApi = {
-  get: (cafeId, days) => api.get(`/cafes/${cafeId}/logs`, { params: { days } }).then(r => r.data),
+  get: (cafeId, days) => api.get(`/cafes/${cafeId}/logs`, { params: { days } }).then(r => toArray(r.data)),
   create: (cafeId, data) => api.post(`/cafes/${cafeId}/logs`, data).then(r => r.data)
 };
 
 export const itemsApi = {
-  get: (cafeId) => api.get(`/cafes/${cafeId}/items`).then(r => r.data),
+  get: (cafeId) => api.get(`/cafes/${cafeId}/items`).then(r => toArray(r.data)),
   create: (cafeId, data) => api.post(`/cafes/${cafeId}/items`, data).then(r => r.data),
   update: (cafeId, id, data) => api.put(`/cafes/${cafeId}/items/${id}`, data).then(r => r.data)
 };
 
 export const ingredientsApi = {
-  get: (cafeId) => api.get(`/cafes/${cafeId}/ingredients`).then(r => r.data),
+  get: (cafeId) => api.get(`/cafes/${cafeId}/ingredients`).then(r => toArray(r.data)),
   create: (cafeId, data) => api.post(`/cafes/${cafeId}/ingredients`, data).then(r => r.data)
 };
 
 export const recipesApi = {
-  get: (cafeId) => api.get(`/cafes/${cafeId}/recipes`).then(r => r.data),
+  get: (cafeId) => api.get(`/cafes/${cafeId}/recipes`).then(r => toArray(r.data)),
   create: (cafeId, data) => api.post(`/cafes/${cafeId}/recipes`, data).then(r => r.data)
 };
 
@@ -64,7 +66,7 @@ export const weatherApi = {
 };
 
 export const transactionsApi = {
-  get: (cafeId, days) => api.get(`/cafes/${cafeId}/transactions`, { params: { days } }).then(r => r.data),
+  get: (cafeId, days) => api.get(`/cafes/${cafeId}/transactions`, { params: { days } }).then(r => toArray(r.data)),
   bulkImport: (cafeId, transactions) => api.post(`/cafes/${cafeId}/transactions/bulk`, { transactions }).then(r => r.data)
 };
 
