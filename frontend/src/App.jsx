@@ -95,23 +95,19 @@ function AppContent({ authEnabled }) {
     <Router>
       <Nav cafe={cafe} authEnabled={authEnabled} />
       <main className="min-h-screen bg-gray-50">
-        {!cafe ? (
-          <NoCafeState />
-        ) : (
-          <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route
-              path="/dashboard"
-              element={<OwnerDashboard cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} />}
-            />
-            <Route
-              path="/kitchen"
-              element={<KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} />}
-            />
-            <Route path="/admin" element={<AdminPanel />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
-        )}
+        <Routes>
+          <Route path="/" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
+          <Route
+            path="/dashboard"
+            element={cafe ? <OwnerDashboard cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
+          />
+          <Route
+            path="/kitchen"
+            element={cafe ? <KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
+          />
+          <Route path="/admin" element={<AdminPanel />} />
+          <Route path="*" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
+        </Routes>
       </main>
     </Router>
   );
