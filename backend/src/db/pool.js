@@ -1,10 +1,10 @@
 const { Pool } = require('pg');
-require('dotenv').config();
+const { getPgConfigDetails } = require('./dbConfig');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
+const { config, source } = getPgConfigDetails();
+console.log(`Database config source: ${source}`);
+
+const pool = new Pool(config);
 
 pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err);

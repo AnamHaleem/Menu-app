@@ -1,18 +1,15 @@
 const { Pool } = require('pg');
-require('dotenv').config();
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
+const { getPgConfigDetails, getPresentDbEnvKeys } = require('./dbConfig');
 
 const seed = async () => {
   let client;
-  try {
-    if (!process.env.DATABASE_URL) {
-      throw new Error('DATABASE_URL is not set');
-    }
+  let pool;
 
+  try {
+    const { config, source } = getPgConfigDetails();
+    console.log(`Seed DB source: ${source}`);
+
+    pool = new Pool(config);
     client = await pool.connect();
     await client.query('BEGIN');
 
@@ -118,10 +115,11 @@ const seed = async () => {
       await client.query('ROLLBACK').catch(() => {});
     }
     console.error('Seed failed:', err.message || err);
+    console.error('Detected DB env keys:', getPresentDbEnvKeys().join(', ') || 'none');
     throw err;
   } finally {
     if (client) client.release();
-    await pool.end();
+    if (pool) await pool.end();
   }
 };
 
