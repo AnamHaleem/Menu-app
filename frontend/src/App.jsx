@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { SignIn, SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import OwnerDashboard from './components/dashboard/OwnerDashboard';
 import KitchenView from './components/kitchen/KitchenView';
@@ -62,7 +62,7 @@ function NoCafeState() {
         <p className="text-sm text-gray-500 mb-5">
           Add your first cafe in Admin to start generating prep lists and forecasts.
         </p>
-        <Button onClick={() => { window.location.href = '/admin'; }}>
+        <Button onClick={() => { window.location.hash = '/admin'; }}>
           Go to Admin
         </Button>
       </Card>
