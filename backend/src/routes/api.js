@@ -5,6 +5,13 @@ const forecastService = require('../services/forecastService');
 const weatherService = require('../services/weatherService');
 const emailService = require('../services/emailService');
 
+const toKey = (value) => String(value || '').trim().toLowerCase();
+const toNumberOrNull = (value) => {
+  if (value === '' || value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 // ─── CAFES ────────────────────────────────────────────────────────────────────
 router.get('/cafes', async (req, res) => {
   try {
@@ -137,6 +144,195 @@ router.post('/cafes/:cafeId/recipes', async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── CATALOG SYNC (ITEMS + INGREDIENTS + RECIPES) ────────────────────────────
+router.post('/cafes/:cafeId/catalog/sync', async (req, res) => {
+  const cafeId = parseInt(req.params.cafeId, 10);
+  const {
+    items = [],
+    ingredients = [],
+    recipes = [],
+    deactivateMissingItems = true
+  } = req.body || {};
+
+  if (Number.isNaN(cafeId)) {
+    return res.status(400).json({ error: 'Invalid cafe ID' });
+  }
+
+  if (!Array.isArray(items) || !Array.isArray(ingredients) || !Array.isArray(recipes)) {
+    return res.status(400).json({ error: 'items, ingredients, and recipes must be arrays' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const existingItemsResult = await client.query(
+      'SELECT id, name FROM items WHERE cafe_id = $1',
+      [cafeId]
+    );
+    const itemByKey = new Map(existingItemsResult.rows.map(row => [toKey(row.name), row]));
+    const seenItemKeys = new Set();
+    const itemIdByKey = new Map();
+
+    let itemsInserted = 0;
+    let itemsUpdated = 0;
+    let itemsDeactivated = 0;
+
+    for (const raw of items) {
+      const name = String(raw?.name || raw?.item_name || '').trim();
+      if (!name) continue;
+
+      const key = toKey(name);
+      seenItemKeys.add(key);
+      const category = String(raw?.category || 'Beverage').trim() || 'Beverage';
+      const price = toNumberOrNull(raw?.price);
+      const active = raw?.active === false ? false : true;
+
+      if (itemByKey.has(key)) {
+        const existing = itemByKey.get(key);
+        const updated = await client.query(`
+          UPDATE items
+          SET name = $1, category = $2, price = $3, active = $4
+          WHERE id = $5 AND cafe_id = $6
+          RETURNING id, name
+        `, [name, category, price, active, existing.id, cafeId]);
+        itemIdByKey.set(key, updated.rows[0].id);
+        itemsUpdated += 1;
+      } else {
+        const inserted = await client.query(`
+          INSERT INTO items (cafe_id, name, category, price, active)
+          VALUES ($1, $2, $3, $4, $5)
+          RETURNING id, name
+        `, [cafeId, name, category, price, active]);
+        itemIdByKey.set(key, inserted.rows[0].id);
+        itemsInserted += 1;
+      }
+    }
+
+    if (deactivateMissingItems && items.length > 0) {
+      for (const row of existingItemsResult.rows) {
+        if (!seenItemKeys.has(toKey(row.name))) {
+          await client.query(
+            'UPDATE items SET active = false WHERE id = $1 AND cafe_id = $2',
+            [row.id, cafeId]
+          );
+          itemsDeactivated += 1;
+        }
+      }
+    }
+
+    const existingIngredientsResult = await client.query(
+      'SELECT id, name FROM ingredients WHERE cafe_id = $1',
+      [cafeId]
+    );
+    const ingredientByKey = new Map(existingIngredientsResult.rows.map(row => [toKey(row.name), row]));
+    const ingredientIdByKey = new Map();
+
+    let ingredientsInserted = 0;
+    let ingredientsUpdated = 0;
+
+    for (const raw of ingredients) {
+      const name = String(raw?.name || raw?.ingredient_name || '').trim();
+      if (!name) continue;
+
+      const key = toKey(name);
+      const unit = String(raw?.unit || '').trim() || null;
+      const parLevel = toNumberOrNull(raw?.par_level) ?? 0;
+      const shelfLife = parseInt(raw?.shelf_life_days, 10);
+      const shelfLifeDays = Number.isNaN(shelfLife) ? 7 : shelfLife;
+      const costPerUnit = toNumberOrNull(raw?.cost_per_unit) ?? 0;
+
+      if (ingredientByKey.has(key)) {
+        const existing = ingredientByKey.get(key);
+        const updated = await client.query(`
+          UPDATE ingredients
+          SET name = $1, unit = $2, par_level = $3, shelf_life_days = $4, cost_per_unit = $5
+          WHERE id = $6 AND cafe_id = $7
+          RETURNING id, name
+        `, [name, unit, parLevel, shelfLifeDays, costPerUnit, existing.id, cafeId]);
+        ingredientIdByKey.set(key, updated.rows[0].id);
+        ingredientsUpdated += 1;
+      } else {
+        const inserted = await client.query(`
+          INSERT INTO ingredients (cafe_id, name, unit, par_level, shelf_life_days, cost_per_unit)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          RETURNING id, name
+        `, [cafeId, name, unit, parLevel, shelfLifeDays, costPerUnit]);
+        ingredientIdByKey.set(key, inserted.rows[0].id);
+        ingredientsInserted += 1;
+      }
+    }
+
+    const allItemsForCafe = await client.query(
+      'SELECT id, name FROM items WHERE cafe_id = $1',
+      [cafeId]
+    );
+    allItemsForCafe.rows.forEach(row => {
+      itemIdByKey.set(toKey(row.name), row.id);
+    });
+
+    const allIngredientsForCafe = await client.query(
+      'SELECT id, name FROM ingredients WHERE cafe_id = $1',
+      [cafeId]
+    );
+    allIngredientsForCafe.rows.forEach(row => {
+      ingredientIdByKey.set(toKey(row.name), row.id);
+    });
+
+    await client.query('DELETE FROM recipes WHERE cafe_id = $1', [cafeId]);
+
+    let recipesInserted = 0;
+    const skippedRecipes = [];
+
+    for (const raw of recipes) {
+      const itemName = String(raw?.item_name || raw?.item || '').trim();
+      const ingredientName = String(raw?.ingredient_name || raw?.ingredient || '').trim();
+      const qty = toNumberOrNull(raw?.qty_per_portion ?? raw?.qty);
+      const station = String(raw?.station || 'General').trim() || 'General';
+
+      const itemId = itemIdByKey.get(toKey(itemName));
+      const ingredientId = ingredientIdByKey.get(toKey(ingredientName));
+
+      if (!itemName || !ingredientName || !itemId || !ingredientId || qty === null || qty <= 0) {
+        skippedRecipes.push({
+          item_name: itemName,
+          ingredient_name: ingredientName,
+          qty_per_portion: qty,
+          reason: 'Missing item/ingredient match or invalid qty_per_portion'
+        });
+        continue;
+      }
+
+      await client.query(`
+        INSERT INTO recipes (cafe_id, item_id, ingredient_id, qty_per_portion, station)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [cafeId, itemId, ingredientId, qty, station]);
+      recipesInserted += 1;
+    }
+
+    await client.query('COMMIT');
+
+    res.json({
+      ok: true,
+      counts: {
+        itemsInserted,
+        itemsUpdated,
+        itemsDeactivated,
+        ingredientsInserted,
+        ingredientsUpdated,
+        recipesInserted,
+        recipesSkipped: skippedRecipes.length
+      },
+      skippedRecipes: skippedRecipes.slice(0, 50)
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 });
 
