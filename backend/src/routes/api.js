@@ -285,8 +285,14 @@ router.get('/cafes/:cafeId/metrics', async (req, res) => {
       FROM daily_logs WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '7 days'
     `, [cafeId]);
     const baseline = await pool.query(`
-      SELECT AVG(waste_value) as avg_waste
-      FROM daily_logs WHERE cafe_id = $1 ORDER BY date ASC LIMIT 7
+      SELECT AVG(seed.waste_value) as avg_waste
+      FROM (
+        SELECT waste_value
+        FROM daily_logs
+        WHERE cafe_id = $1
+        ORDER BY date ASC
+        LIMIT 7
+      ) seed
     `, [cafeId]);
 
     const baselineWaste = parseFloat(baseline.rows[0]?.avg_waste || 0);
