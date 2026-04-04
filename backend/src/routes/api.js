@@ -40,6 +40,23 @@ const sendCafeWriteError = (res, err) => {
   }
   return res.status(500).json({ error: err.message });
 };
+const isOwnerEmailConflict = (err) => {
+  if (!err || err.code !== '23505') return false;
+  const fingerprint = `${err.constraint || ''} ${err.detail || ''} ${err.message || ''}`.toLowerCase();
+  return (
+    fingerprint.includes('idx_owner_users_email_unique') ||
+    fingerprint.includes('owner_users_email_key') ||
+    fingerprint.includes('lower(email)')
+  );
+};
+const sendOwnerWriteError = (res, err) => {
+  if (isOwnerEmailConflict(err)) {
+    return res.status(409).json({
+      error: 'An owner account already exists with this email.'
+    });
+  }
+  return res.status(500).json({ error: err.message });
+};
 
 const OWNER_CODE_TTL_MINUTES = Math.max(3, parseInt(process.env.OWNER_CODE_TTL_MINUTES || '10', 10));
 const OWNER_SESSION_TTL_HOURS = Math.max(1, parseInt(process.env.OWNER_SESSION_TTL_HOURS || '168', 10));
@@ -57,7 +74,7 @@ const hashOwnerCode = (email, code, secret) => {
 
 const createOwnerCode = () => String(Math.floor(100000 + Math.random() * 900000));
 
-async function getOwnerCafesByEmail(email) {
+async function getLegacyOwnerCafesByEmail(email) {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) return [];
 
@@ -74,6 +91,108 @@ async function getOwnerCafesByEmail(email) {
   );
 
   return result.rows;
+}
+
+async function getOwnerAccessByEmail(email) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) {
+    return { owner: null, cafes: [], source: 'none' };
+  }
+
+  const ownerResult = await pool.query(
+    `SELECT id, email, full_name, active
+     FROM owner_users
+     WHERE LOWER(email) = $1
+     LIMIT 1`,
+    [normalizedEmail]
+  );
+
+  if (ownerResult.rows.length) {
+    const owner = ownerResult.rows[0];
+    if (!owner.active) {
+      return { owner, cafes: [], source: 'owner_inactive' };
+    }
+
+    const cafesResult = await pool.query(
+      `SELECT c.id, c.name, c.city, c.email, c.kitchen_lead_email, c.prep_send_time
+       FROM owner_cafe_access oca
+       JOIN cafes c ON c.id = oca.cafe_id
+       WHERE oca.owner_id = $1
+         AND c.active = true
+       ORDER BY c.name`,
+      [owner.id]
+    );
+
+    return { owner, cafes: cafesResult.rows, source: 'owner_map' };
+  }
+
+  const cafes = await getLegacyOwnerCafesByEmail(normalizedEmail);
+  return {
+    owner: null,
+    cafes,
+    source: cafes.length ? 'legacy_match' : 'none'
+  };
+}
+
+async function getOwnerById(ownerId) {
+  const result = await pool.query(
+    `SELECT id, email, full_name, active, created_at, updated_at
+     FROM owner_users
+     WHERE id = $1`,
+    [ownerId]
+  );
+  return result.rows[0] || null;
+}
+
+async function listOwners({ cafeId = null, includeInactive = false } = {}) {
+  const params = [];
+  const where = [];
+
+  if (!includeInactive) {
+    where.push('o.active = true');
+  }
+
+  if (cafeId) {
+    params.push(cafeId);
+    where.push(`EXISTS (
+      SELECT 1 FROM owner_cafe_access x
+      WHERE x.owner_id = o.id AND x.cafe_id = $${params.length}
+    )`);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  const query = `
+    SELECT
+      o.id,
+      o.email,
+      o.full_name,
+      o.active,
+      o.created_at,
+      o.updated_at,
+      COALESCE(
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id', c.id,
+            'name', c.name,
+            'city', c.city
+          )
+        ) FILTER (WHERE c.id IS NOT NULL),
+        '[]'::json
+      ) AS cafes
+    FROM owner_users o
+    LEFT JOIN owner_cafe_access oca ON oca.owner_id = o.id
+    LEFT JOIN cafes c ON c.id = oca.cafe_id
+    ${whereSql}
+    GROUP BY o.id
+    ORDER BY o.created_at DESC, o.id DESC
+  `;
+
+  const result = await pool.query(query, params);
+  return result.rows.map((row) => ({
+    ...row,
+    cafes: Array.isArray(row.cafes) ? row.cafes : []
+  }));
 }
 
 async function buildMetrics(cafeId) {
@@ -184,7 +303,7 @@ async function requireOwnerCafeAccess(req, res, next) {
       return res.status(400).json({ error: 'Invalid cafe id' });
     }
 
-    const cafes = await getOwnerCafesByEmail(req.owner.email);
+    const { cafes } = await getOwnerAccessByEmail(req.owner.email);
     const allowedCafe = cafes.find((cafe) => cafe.id === cafeId);
     if (!allowedCafe) {
       return res.status(403).json({ error: 'You do not have access to this cafe' });
@@ -213,7 +332,7 @@ router.post('/owner-auth/request-code', async (req, res) => {
   }
 
   try {
-    const cafes = await getOwnerCafesByEmail(email);
+    const { cafes } = await getOwnerAccessByEmail(email);
     if (!cafes.length) {
       return res.status(404).json({ error: 'No active cafe found for this email' });
     }
@@ -270,7 +389,7 @@ router.post('/owner-auth/verify-code', async (req, res) => {
     }
 
     ownerCodeStore.delete(email);
-    const cafes = await getOwnerCafesByEmail(email);
+    const { cafes } = await getOwnerAccessByEmail(email);
     if (!cafes.length) {
       return res.status(404).json({ error: 'No active cafe found for this account' });
     }
@@ -296,7 +415,7 @@ router.post('/owner-auth/verify-code', async (req, res) => {
 
 router.get('/owner-auth/me', requireOwnerAuth, async (req, res) => {
   try {
-    const cafes = await getOwnerCafesByEmail(req.owner.email);
+    const { cafes } = await getOwnerAccessByEmail(req.owner.email);
     if (!cafes.length) {
       return res.status(403).json({ error: 'No active cafes found for this account' });
     }
@@ -312,8 +431,261 @@ router.get('/owner-auth/me', requireOwnerAuth, async (req, res) => {
 
 router.get('/owner/cafes', requireOwnerAuth, async (req, res) => {
   try {
-    const cafes = await getOwnerCafesByEmail(req.owner.email);
+    const { cafes } = await getOwnerAccessByEmail(req.owner.email);
     return res.json(cafes);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ADMIN OWNER MANAGEMENT ────────────────────────────────────────────────────
+router.get('/admin/owners', async (req, res) => {
+  try {
+    const includeInactive = ['1', 'true', 'yes'].includes(
+      String(req.query.includeInactive || '').trim().toLowerCase()
+    );
+    const cafeIdRaw = req.query.cafeId;
+    const cafeId = cafeIdRaw ? parseInt(cafeIdRaw, 10) : null;
+    if (cafeIdRaw && Number.isNaN(cafeId)) {
+      return res.status(400).json({ error: 'Invalid cafeId' });
+    }
+
+    const owners = await listOwners({ includeInactive, cafeId });
+    return res.json(owners);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/owners', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const fullName = String(req.body?.full_name || '').trim() || null;
+  const cafeIds = Array.from(new Set(
+    (Array.isArray(req.body?.cafe_ids) ? req.body.cafe_ids : [])
+      .map((value) => parseInt(value, 10))
+      .filter((value) => Number.isInteger(value) && value > 0)
+  ));
+
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Valid owner email is required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let owner = await client.query(
+      `SELECT id, email, full_name, active
+       FROM owner_users
+       WHERE LOWER(email) = $1
+       LIMIT 1`,
+      [email]
+    );
+
+    let ownerId;
+    let created = false;
+
+    if (owner.rows.length) {
+      ownerId = owner.rows[0].id;
+      const existingName = owner.rows[0].full_name;
+      await client.query(
+        `UPDATE owner_users
+         SET full_name = COALESCE($1, full_name),
+             active = true,
+             updated_at = NOW()
+         WHERE id = $2`,
+        [fullName || existingName || null, ownerId]
+      );
+    } else {
+      const inserted = await client.query(
+        `INSERT INTO owner_users (email, full_name, active)
+         VALUES ($1, $2, true)
+         RETURNING id`,
+        [email, fullName]
+      );
+      ownerId = inserted.rows[0].id;
+      created = true;
+    }
+
+    for (const cafeId of cafeIds) {
+      await client.query(
+        `INSERT INTO owner_cafe_access (owner_id, cafe_id)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [ownerId, cafeId]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    const owners = await listOwners({ includeInactive: true });
+    const ownerPayload = owners.find((entry) => entry.id === ownerId) || null;
+    return res.status(created ? 201 : 200).json(ownerPayload || { id: ownerId, email, full_name: fullName, cafes: [] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    return sendOwnerWriteError(res, err);
+  } finally {
+    client.release();
+  }
+});
+
+router.patch('/admin/owners/:ownerId', async (req, res) => {
+  const ownerId = parseInt(req.params.ownerId, 10);
+  if (Number.isNaN(ownerId)) {
+    return res.status(400).json({ error: 'Invalid owner id' });
+  }
+
+  try {
+    const existing = await getOwnerById(ownerId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Owner not found' });
+    }
+
+    const nextEmailRaw = req.body?.email ?? existing.email;
+    const nextEmail = normalizeEmail(nextEmailRaw);
+    if (!isValidEmail(nextEmail)) {
+      return res.status(400).json({ error: 'Valid owner email is required' });
+    }
+
+    const nextNameRaw = req.body?.full_name;
+    const nextName = nextNameRaw === undefined ? existing.full_name : (String(nextNameRaw || '').trim() || null);
+    const nextActive = req.body?.active === undefined ? existing.active : Boolean(req.body.active);
+
+    await pool.query(
+      `UPDATE owner_users
+       SET email = $1,
+           full_name = $2,
+           active = $3,
+           updated_at = NOW()
+       WHERE id = $4`,
+      [nextEmail, nextName, nextActive, ownerId]
+    );
+
+    const owners = await listOwners({ includeInactive: true });
+    const updated = owners.find((entry) => entry.id === ownerId);
+    return res.json(updated || { ...existing, email: nextEmail, full_name: nextName, active: nextActive });
+  } catch (err) {
+    return sendOwnerWriteError(res, err);
+  }
+});
+
+router.delete('/admin/owners/:ownerId', async (req, res) => {
+  const ownerId = parseInt(req.params.ownerId, 10);
+  if (Number.isNaN(ownerId)) {
+    return res.status(400).json({ error: 'Invalid owner id' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE owner_users
+       SET active = false,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, email, full_name, active`,
+      [ownerId]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Owner not found' });
+    }
+
+    return res.json({ deleted: true, owner: result.rows[0] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/owners/:ownerId/cafes', async (req, res) => {
+  const ownerId = parseInt(req.params.ownerId, 10);
+  const cafeId = parseInt(req.body?.cafe_id, 10);
+
+  if (Number.isNaN(ownerId) || Number.isNaN(cafeId)) {
+    return res.status(400).json({ error: 'ownerId and cafe_id are required' });
+  }
+
+  try {
+    const owner = await getOwnerById(ownerId);
+    if (!owner) return res.status(404).json({ error: 'Owner not found' });
+
+    await pool.query(
+      `INSERT INTO owner_cafe_access (owner_id, cafe_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [ownerId, cafeId]
+    );
+
+    const owners = await listOwners({ includeInactive: true });
+    const updated = owners.find((entry) => entry.id === ownerId);
+    return res.json(updated || owner);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/admin/owners/:ownerId/cafes/:cafeId', async (req, res) => {
+  const ownerId = parseInt(req.params.ownerId, 10);
+  const cafeId = parseInt(req.params.cafeId, 10);
+
+  if (Number.isNaN(ownerId) || Number.isNaN(cafeId)) {
+    return res.status(400).json({ error: 'Invalid ownerId or cafeId' });
+  }
+
+  try {
+    await pool.query(
+      'DELETE FROM owner_cafe_access WHERE owner_id = $1 AND cafe_id = $2',
+      [ownerId, cafeId]
+    );
+
+    const owners = await listOwners({ includeInactive: true });
+    const updated = owners.find((entry) => entry.id === ownerId);
+    return res.json(updated || { id: ownerId });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/owners/:ownerId/send-invite', async (req, res) => {
+  const ownerId = parseInt(req.params.ownerId, 10);
+  const secret = getOwnerAuthSecret();
+
+  if (Number.isNaN(ownerId)) {
+    return res.status(400).json({ error: 'Invalid owner id' });
+  }
+
+  if (!secret) {
+    return res.status(503).json({
+      error: 'Owner auth is not configured. Set OWNER_AUTH_SECRET (or PREP_RUN_TOKEN).'
+    });
+  }
+
+  try {
+    const owner = await getOwnerById(ownerId);
+    if (!owner) return res.status(404).json({ error: 'Owner not found' });
+    if (!owner.active) return res.status(400).json({ error: 'Owner account is inactive' });
+
+    const access = await getOwnerAccessByEmail(owner.email);
+    if (!access.cafes.length) {
+      return res.status(400).json({ error: 'Owner has no cafe access assigned yet' });
+    }
+
+    const code = createOwnerCode();
+    ownerCodeStore.set(owner.email, {
+      codeHash: hashOwnerCode(owner.email, code, secret),
+      expiresAt: Date.now() + OWNER_CODE_TTL_MINUTES * 60 * 1000
+    });
+
+    const emailResult = await emailService.sendOwnerLoginCode({
+      email: owner.email,
+      code,
+      cafes: access.cafes,
+      expiresMinutes: OWNER_CODE_TTL_MINUTES
+    });
+
+    return res.json({
+      ok: true,
+      ownerId: owner.id,
+      to: emailResult?.to || owner.email
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

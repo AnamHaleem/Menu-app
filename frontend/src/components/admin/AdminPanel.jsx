@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { cafesApi, itemsApi, ingredientsApi, recipesApi, metricsApi } from '../../lib/api';
+import { cafesApi, itemsApi, ingredientsApi, recipesApi, metricsApi, adminOwnersApi } from '../../lib/api';
 import { Spinner, Badge, Button, Card, SectionHeader, MetricCard } from '../shared';
 
 const fmt$ = (v) => '$' + Math.round(Number(v) || 0).toLocaleString();
@@ -127,6 +127,290 @@ function AddCafeForm({ onSave, onCancel }) {
         <Button variant="ghost" onClick={onCancel} size="sm" disabled={saving}>Cancel</Button>
       </div>
     </Card>
+  );
+}
+
+function OwnerAccessSection({ cafe }) {
+  const [owners, setOwners] = useState([]);
+  const [loadingOwners, setLoadingOwners] = useState(true);
+  const [showAddOwner, setShowAddOwner] = useState(false);
+  const [addingOwner, setAddingOwner] = useState(false);
+  const [workingOwnerId, setWorkingOwnerId] = useState(null);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [editOwnerId, setEditOwnerId] = useState(null);
+  const [editForm, setEditForm] = useState({ email: '', full_name: '' });
+  const [newOwner, setNewOwner] = useState({
+    email: '',
+    full_name: '',
+    send_invite: true
+  });
+
+  const loadOwners = async () => {
+    setLoadingOwners(true);
+    setError('');
+    try {
+      const data = await adminOwnersApi.list({ cafeId: cafe.id, includeInactive: true });
+      setOwners(data);
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setError(apiError || 'Could not load owner access list.');
+    } finally {
+      setLoadingOwners(false);
+    }
+  };
+
+  useEffect(() => {
+    loadOwners();
+  }, [cafe.id]);
+
+  const handleAddOwner = async () => {
+    if (!newOwner.email.trim()) {
+      setError('Owner email is required.');
+      return;
+    }
+
+    setAddingOwner(true);
+    setMessage('');
+    setError('');
+
+    try {
+      const owner = await adminOwnersApi.create({
+        email: newOwner.email.trim(),
+        full_name: newOwner.full_name.trim(),
+        cafe_ids: [cafe.id]
+      });
+
+      if (newOwner.send_invite && owner?.id) {
+        await adminOwnersApi.sendInvite(owner.id);
+      }
+
+      await loadOwners();
+      setShowAddOwner(false);
+      setNewOwner({ email: '', full_name: '', send_invite: true });
+      setMessage(newOwner.send_invite ? 'Owner added and invite sent.' : 'Owner added to this cafe.');
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setError(apiError || 'Could not add owner access.');
+    } finally {
+      setAddingOwner(false);
+    }
+  };
+
+  const handleSendInvite = async (ownerId) => {
+    setWorkingOwnerId(ownerId);
+    setMessage('');
+    setError('');
+    try {
+      await adminOwnersApi.sendInvite(ownerId);
+      setMessage('Invite sent.');
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setError(apiError || 'Could not send invite.');
+    } finally {
+      setWorkingOwnerId(null);
+    }
+  };
+
+  const handleRemoveAccess = async (ownerId) => {
+    const confirmed = window.confirm(`Remove this owner's access to ${cafe.name}?`);
+    if (!confirmed) return;
+
+    setWorkingOwnerId(ownerId);
+    setMessage('');
+    setError('');
+    try {
+      await adminOwnersApi.unassignCafe(ownerId, cafe.id);
+      await loadOwners();
+      setMessage('Owner access removed from this cafe.');
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setError(apiError || 'Could not remove owner access.');
+    } finally {
+      setWorkingOwnerId(null);
+    }
+  };
+
+  const handleDeactivate = async (ownerId) => {
+    const confirmed = window.confirm('Deactivate this owner account for all cafes?');
+    if (!confirmed) return;
+
+    setWorkingOwnerId(ownerId);
+    setMessage('');
+    setError('');
+    try {
+      await adminOwnersApi.deactivate(ownerId);
+      await loadOwners();
+      setMessage('Owner account deactivated.');
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setError(apiError || 'Could not deactivate owner.');
+    } finally {
+      setWorkingOwnerId(null);
+    }
+  };
+
+  const startEditOwner = (owner) => {
+    setEditOwnerId(owner.id);
+    setEditForm({
+      email: owner.email || '',
+      full_name: owner.full_name || ''
+    });
+    setMessage('');
+    setError('');
+  };
+
+  const cancelEditOwner = () => {
+    setEditOwnerId(null);
+    setEditForm({ email: '', full_name: '' });
+  };
+
+  const handleSaveOwner = async (ownerId) => {
+    if (!editForm.email.trim()) {
+      setError('Owner email is required.');
+      return;
+    }
+
+    setWorkingOwnerId(ownerId);
+    setMessage('');
+    setError('');
+    try {
+      await adminOwnersApi.update(ownerId, {
+        email: editForm.email.trim(),
+        full_name: editForm.full_name.trim() || null
+      });
+      await loadOwners();
+      setEditOwnerId(null);
+      setMessage('Owner details updated.');
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setError(apiError || 'Could not update owner.');
+    } finally {
+      setWorkingOwnerId(null);
+    }
+  };
+
+  return (
+    <div className="mt-6 pt-6 border-t border-gray-100">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs text-gray-400">Owner access</p>
+        <Button size="sm" variant="secondary" onClick={() => setShowAddOwner((prev) => !prev)}>
+          {showAddOwner ? 'Close' : '+ Add owner'}
+        </Button>
+      </div>
+
+      {showAddOwner && (
+        <Card className="p-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Owner email</label>
+              <input
+                type="email"
+                value={newOwner.email}
+                onChange={(e) => setNewOwner((prev) => ({ ...prev, email: e.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                placeholder="owner@yourcafe.com"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Owner name (optional)</label>
+              <input
+                value={newOwner.full_name}
+                onChange={(e) => setNewOwner((prev) => ({ ...prev, full_name: e.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                placeholder="Jane Owner"
+              />
+            </div>
+          </div>
+          <label className="inline-flex items-center gap-2 text-sm text-gray-600 mb-3">
+            <input
+              type="checkbox"
+              checked={newOwner.send_invite}
+              onChange={(e) => setNewOwner((prev) => ({ ...prev, send_invite: e.target.checked }))}
+            />
+            Send sign-in invite code now
+          </label>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={handleAddOwner} disabled={addingOwner}>
+              {addingOwner ? 'Adding...' : 'Add owner access'}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setShowAddOwner(false)} disabled={addingOwner}>
+              Cancel
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {loadingOwners ? (
+        <Spinner />
+      ) : owners.length === 0 ? (
+        <p className="text-sm text-gray-400">No owner access assigned for this cafe yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {owners.map((owner) => (
+            <Card key={owner.id} className="p-4">
+              {editOwnerId === owner.id ? (
+                <div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                    <input
+                      type="email"
+                      value={editForm.email}
+                      onChange={(e) => setEditForm((prev) => ({ ...prev, email: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                    />
+                    <input
+                      value={editForm.full_name}
+                      onChange={(e) => setEditForm((prev) => ({ ...prev, full_name: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                      placeholder="Owner name"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => handleSaveOwner(owner.id)} disabled={workingOwnerId === owner.id}>
+                      {workingOwnerId === owner.id ? 'Saving...' : 'Save'}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={cancelEditOwner} disabled={workingOwnerId === owner.id}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">{owner.full_name || 'Owner'}</p>
+                    <p className="text-sm text-gray-500">{owner.email}</p>
+                    <div className="mt-1 flex items-center gap-2">
+                      <Badge color={owner.active ? 'green' : 'gray'}>
+                        {owner.active ? 'Active' : 'Inactive'}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => handleSendInvite(owner.id)} disabled={workingOwnerId === owner.id || !owner.active}>
+                      {workingOwnerId === owner.id ? 'Sending...' : 'Send invite'}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => startEditOwner(owner)}>
+                      Edit
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => handleRemoveAccess(owner.id)} disabled={workingOwnerId === owner.id}>
+                      Remove access
+                    </Button>
+                    {owner.active && (
+                      <Button size="sm" variant="danger" onClick={() => handleDeactivate(owner.id)} disabled={workingOwnerId === owner.id}>
+                        Deactivate
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {error && <p className="text-xs text-red-600 mt-3">{error}</p>}
+      {message && <p className="text-xs text-teal-600 mt-3">{message}</p>}
+    </div>
   );
 }
 
@@ -535,6 +819,8 @@ function CafeDetail({ cafe, onCafeDeleted, onCafeUpdated }) {
               </p>
             )}
           </div>
+
+          <OwnerAccessSection cafe={cafe} />
 
           <div className="mt-6 pt-6 border-t border-gray-100">
             <p className="text-xs text-gray-400 mb-2">Danger zone</p>

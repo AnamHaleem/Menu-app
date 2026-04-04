@@ -153,4 +153,19 @@ export const ownerPortalApi = {
   }
 };
 
+export const adminOwnersApi = {
+  list: (options = {}) => {
+    const params = {};
+    if (options.cafeId) params.cafeId = options.cafeId;
+    if (options.includeInactive) params.includeInactive = true;
+    return api.get('/admin/owners', { params }).then(r => toArray(r.data));
+  },
+  create: (data) => api.post('/admin/owners', data).then(r => r.data),
+  update: (ownerId, data) => api.patch(`/admin/owners/${ownerId}`, data).then(r => r.data),
+  deactivate: (ownerId) => api.delete(`/admin/owners/${ownerId}`).then(r => r.data),
+  assignCafe: (ownerId, cafeId) => api.post(`/admin/owners/${ownerId}/cafes`, { cafe_id: cafeId }).then(r => r.data),
+  unassignCafe: (ownerId, cafeId) => api.delete(`/admin/owners/${ownerId}/cafes/${cafeId}`).then(r => r.data),
+  sendInvite: (ownerId) => api.post(`/admin/owners/${ownerId}/send-invite`).then(r => r.data)
+};
+
 export default api;

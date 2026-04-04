@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { HashRouter as Router, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { SignIn, SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import OwnerDashboard from './components/dashboard/OwnerDashboard';
 import KitchenView from './components/kitchen/KitchenView';
@@ -92,6 +92,33 @@ function NoCafeState() {
   );
 }
 
+function AppShell({ cafe, authEnabled, onCafeChange }) {
+  const location = useLocation();
+  const isOwnerPortal = location.pathname.startsWith('/owner');
+
+  return (
+    <>
+      {!isOwnerPortal && <Nav cafe={cafe} authEnabled={authEnabled} />}
+      <main className="min-h-screen bg-gray-50">
+        <Routes>
+          <Route path="/" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
+          <Route
+            path="/dashboard"
+            element={cafe ? <OwnerDashboard cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
+          />
+          <Route
+            path="/kitchen"
+            element={cafe ? <KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
+          />
+          <Route path="/admin" element={<AdminPanel onCafeChange={onCafeChange} currentCafeId={cafe?.id} />} />
+          <Route path="/owner/*" element={<OwnerPortal />} />
+          <Route path="*" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
+        </Routes>
+      </main>
+    </>
+  );
+}
+
 function AppContent({ authEnabled }) {
   const [cafe, setCafe] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -177,23 +204,7 @@ function AppContent({ authEnabled }) {
 
   return (
     <Router>
-      <Nav cafe={cafe} authEnabled={authEnabled} />
-      <main className="min-h-screen bg-gray-50">
-        <Routes>
-          <Route path="/" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
-          <Route
-            path="/dashboard"
-            element={cafe ? <OwnerDashboard cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
-          />
-          <Route
-            path="/kitchen"
-            element={cafe ? <KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
-          />
-          <Route path="/admin" element={<AdminPanel onCafeChange={handleCafeChange} currentCafeId={cafe?.id} />} />
-          <Route path="/owner/*" element={<OwnerPortal />} />
-          <Route path="*" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
-        </Routes>
-      </main>
+      <AppShell cafe={cafe} authEnabled={authEnabled} onCafeChange={handleCafeChange} />
     </Router>
   );
 }

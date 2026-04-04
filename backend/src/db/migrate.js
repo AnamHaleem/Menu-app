@@ -56,6 +56,75 @@ const migrate = async () => {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS owner_users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255),
+        active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_owner_users_email_unique
+      ON owner_users (LOWER(email));
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS owner_cafe_access (
+        id SERIAL PRIMARY KEY,
+        owner_id INTEGER REFERENCES owner_users(id) ON DELETE CASCADE,
+        cafe_id INTEGER REFERENCES cafes(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(owner_id, cafe_id)
+      );
+    `);
+
+    // Backfill owner records from active cafe contacts for smoother rollout.
+    await client.query(`
+      INSERT INTO owner_users (email, full_name, active)
+      SELECT DISTINCT LOWER(TRIM(c.email)), NULLIF(TRIM(c.owner_name), ''), true
+      FROM cafes c
+      WHERE c.active = true
+        AND c.email IS NOT NULL
+        AND TRIM(c.email) <> ''
+      ON CONFLICT DO NOTHING;
+    `);
+
+    await client.query(`
+      INSERT INTO owner_users (email, full_name, active)
+      SELECT DISTINCT LOWER(TRIM(c.kitchen_lead_email)), 'Kitchen Lead', true
+      FROM cafes c
+      WHERE c.active = true
+        AND c.kitchen_lead_email IS NOT NULL
+        AND TRIM(c.kitchen_lead_email) <> ''
+      ON CONFLICT DO NOTHING;
+    `);
+
+    await client.query(`
+      INSERT INTO owner_cafe_access (owner_id, cafe_id)
+      SELECT ou.id, c.id
+      FROM cafes c
+      JOIN owner_users ou ON LOWER(ou.email) = LOWER(TRIM(c.email))
+      WHERE c.active = true
+        AND c.email IS NOT NULL
+        AND TRIM(c.email) <> ''
+      ON CONFLICT DO NOTHING;
+    `);
+
+    await client.query(`
+      INSERT INTO owner_cafe_access (owner_id, cafe_id)
+      SELECT ou.id, c.id
+      FROM cafes c
+      JOIN owner_users ou ON LOWER(ou.email) = LOWER(TRIM(c.kitchen_lead_email))
+      WHERE c.active = true
+        AND c.kitchen_lead_email IS NOT NULL
+        AND TRIM(c.kitchen_lead_email) <> ''
+      ON CONFLICT DO NOTHING;
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS items (
         id SERIAL PRIMARY KEY,
         cafe_id INTEGER REFERENCES cafes(id) ON DELETE CASCADE,
