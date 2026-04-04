@@ -23,7 +23,14 @@ const extractBearerToken = (authHeader = '') => {
 // ─── CAFES ────────────────────────────────────────────────────────────────────
 router.get('/cafes', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM cafes ORDER BY name');
+    const includeInactive = ['1', 'true', 'yes'].includes(
+      String(req.query.includeInactive || '').trim().toLowerCase()
+    );
+
+    const result = includeInactive
+      ? await pool.query('SELECT * FROM cafes ORDER BY name')
+      : await pool.query('SELECT * FROM cafes WHERE active = true ORDER BY name');
+
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });

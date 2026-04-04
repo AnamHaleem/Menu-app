@@ -19,7 +19,10 @@ const api = axios.create({
 const toArray = (value) => (Array.isArray(value) ? value : []);
 
 export const cafesApi = {
-  getAll: () => api.get('/cafes').then(r => toArray(r.data)),
+  getAll: (options = {}) => {
+    const params = options.includeInactive ? { includeInactive: true } : undefined;
+    return api.get('/cafes', { params }).then(r => toArray(r.data));
+  },
   getOne: (id) => api.get(`/cafes/${id}`).then(r => r.data),
   create: (data) => api.post('/cafes', data).then(r => r.data),
   update: (id, data) => api.put(`/cafes/${id}`, data).then(r => r.data),
