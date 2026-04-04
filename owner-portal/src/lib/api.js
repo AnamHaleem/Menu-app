@@ -1,0 +1,101 @@
+import axios from 'axios';
+
+function resolveApiBaseUrl() {
+  const envUrl = (import.meta.env.VITE_API_URL || '').trim();
+  if (!envUrl) return 'http://localhost:3001/api';
+  const trimmed = envUrl.replace(/\/+$/, '');
+  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+}
+
+const toArray = (value) => (Array.isArray(value) ? value : []);
+const OWNER_TOKEN_STORAGE_KEY = 'menu.ownerAuthToken';
+
+function readOwnerToken() {
+  try {
+    return (window.localStorage.getItem(OWNER_TOKEN_STORAGE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function saveOwnerToken(token) {
+  try {
+    if (token) {
+      window.localStorage.setItem(OWNER_TOKEN_STORAGE_KEY, String(token));
+    } else {
+      window.localStorage.removeItem(OWNER_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // ignore private mode storage issues
+  }
+}
+
+const publicApi = axios.create({
+  baseURL: resolveApiBaseUrl(),
+  withCredentials: true
+});
+
+const ownerApi = axios.create({
+  baseURL: resolveApiBaseUrl(),
+  withCredentials: true
+});
+
+ownerApi.interceptors.request.use((config) => {
+  const token = readOwnerToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+export const weatherApi = {
+  get: (city) => publicApi.get('/weather', { params: { city } }).then((response) => response.data)
+};
+
+export const ownerAuthApi = {
+  getStoredToken: () => readOwnerToken(),
+  setStoredToken: (token) => saveOwnerToken(token),
+  clearStoredToken: () => saveOwnerToken(''),
+  requestCode: (email) => publicApi.post('/owner-auth/request-code', { email }).then((response) => response.data),
+  verifyCode: async (email, code) => {
+    const result = await publicApi.post('/owner-auth/verify-code', { email, code }).then((response) => response.data);
+    if (result?.token) {
+      saveOwnerToken(result.token);
+    }
+    return result;
+  },
+  me: () => ownerApi.get('/owner-auth/me').then((response) => response.data)
+};
+
+export const ownerPortalApi = {
+  cafes: {
+    getAll: () => ownerApi.get('/owner/cafes').then((response) => toArray(response.data))
+  },
+  metrics: {
+    get: (cafeId) => ownerApi.get(`/owner/cafes/${cafeId}/metrics`).then((response) => response.data)
+  },
+  logs: {
+    get: (cafeId, days) => ownerApi.get(`/owner/cafes/${cafeId}/logs`, { params: { days } }).then((response) => toArray(response.data)),
+    create: (cafeId, data) => ownerApi.post(`/owner/cafes/${cafeId}/logs`, data).then((response) => response.data)
+  },
+  forecast: {
+    get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/forecast`, { params: { date } }).then((response) => response.data),
+    generate: (cafeId, date) => ownerApi.post(`/owner/cafes/${cafeId}/forecast/generate`, { date }).then((response) => response.data),
+    sendEmail: (cafeId, date) => ownerApi.post(`/owner/cafes/${cafeId}/send-prep-list`, { date }).then((response) => response.data)
+  },
+  prepList: {
+    get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/prep-list`, { params: { date } }).then((response) => toArray(response.data)),
+    toggle: (cafeId, prepId, completed) =>
+      ownerApi.patch(`/owner/cafes/${cafeId}/prep-list/${prepId}`, { completed }).then((response) => response.data)
+  },
+  weather: weatherApi
+};
+
+// Compatibility exports for shared dashboard/kitchen components.
+export const metricsApi = ownerPortalApi.metrics;
+export const logsApi = ownerPortalApi.logs;
+export const forecastApi = ownerPortalApi.forecast;
+export const prepListApi = ownerPortalApi.prepList;
+
+export default publicApi;
