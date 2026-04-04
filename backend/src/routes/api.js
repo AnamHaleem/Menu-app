@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
 const forecastService = require('../services/forecastService');
 const weatherService = require('../services/weatherService');
@@ -15,6 +17,8 @@ const toNumberOrNull = (value) => {
 
 const PREP_TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const isValidPrepTime = (value) => PREP_TIME_PATTERN.test(String(value || '').trim());
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 const extractBearerToken = (authHeader = '') => {
   const match = String(authHeader).match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : '';
@@ -36,6 +40,284 @@ const sendCafeWriteError = (res, err) => {
   }
   return res.status(500).json({ error: err.message });
 };
+
+const OWNER_CODE_TTL_MINUTES = Math.max(3, parseInt(process.env.OWNER_CODE_TTL_MINUTES || '10', 10));
+const OWNER_SESSION_TTL_HOURS = Math.max(1, parseInt(process.env.OWNER_SESSION_TTL_HOURS || '168', 10));
+const ownerCodeStore = new Map(); // email -> { codeHash, expiresAt }
+
+const getOwnerAuthSecret = () =>
+  String(process.env.OWNER_AUTH_SECRET || process.env.PREP_RUN_TOKEN || '').trim();
+
+const hashOwnerCode = (email, code, secret) => {
+  return crypto
+    .createHash('sha256')
+    .update(`${normalizeEmail(email)}:${String(code || '').trim()}:${secret}`)
+    .digest('hex');
+};
+
+const createOwnerCode = () => String(Math.floor(100000 + Math.random() * 900000));
+
+async function getOwnerCafesByEmail(email) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return [];
+
+  const result = await pool.query(
+    `SELECT id, name, city, email, kitchen_lead_email, prep_send_time
+     FROM cafes
+     WHERE active = true
+       AND (
+         LOWER(email) = $1
+         OR LOWER(COALESCE(kitchen_lead_email, '')) = $1
+       )
+     ORDER BY name`,
+    [normalizedEmail]
+  );
+
+  return result.rows;
+}
+
+async function buildMetrics(cafeId) {
+  const totalLogs = await pool.query('SELECT COUNT(*) as days FROM daily_logs WHERE cafe_id = $1', [cafeId]);
+  const allTime = await pool.query(`
+    SELECT
+      SUM(waste_value) as total_waste,
+      SUM(items_86d) as total_86,
+      COUNT(*) as days,
+      AVG(actual_covers) as avg_covers
+    FROM daily_logs WHERE cafe_id = $1
+  `, [cafeId]);
+  const last30 = await pool.query(`
+    SELECT
+      SUM(waste_value) as waste_30,
+      SUM(items_86d) as incidents_86_30,
+      COUNT(*) as days_30
+    FROM daily_logs WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '30 days'
+  `, [cafeId]);
+  const last7 = await pool.query(`
+    SELECT
+      SUM(waste_value) as waste_7,
+      SUM(items_86d) as incidents_86_7,
+      COUNT(*) as days_7
+    FROM daily_logs WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '7 days'
+  `, [cafeId]);
+  const baseline = await pool.query(`
+    SELECT AVG(seed.waste_value) as avg_waste
+    FROM (
+      SELECT waste_value
+      FROM daily_logs
+      WHERE cafe_id = $1
+      ORDER BY date ASC
+      LIMIT 7
+    ) seed
+  `, [cafeId]);
+
+  const baselineWaste = parseFloat(baseline.rows[0]?.avg_waste || 0);
+  const totalWaste = parseFloat(allTime.rows[0]?.total_waste || 0);
+  const daysRunning = parseInt(totalLogs.rows[0]?.days || 0);
+  const labourSavedMins = daysRunning * 15;
+  const labourSaved$ = Math.round(labourSavedMins / 60 * 21 * 100) / 100;
+  const projectedWasteWithout = baselineWaste * daysRunning;
+  const wasteSaved = Math.max(0, projectedWasteWithout - totalWaste);
+  const totalSavings = wasteSaved + labourSaved$;
+  const annualised = daysRunning > 0 ? Math.round(totalSavings * (365 / daysRunning)) : 0;
+
+  const last30WasteAfter = parseFloat(last30.rows[0]?.waste_30 || 0);
+  const days30 = parseInt(last30.rows[0]?.days_30 || 1);
+  const avgDailyAfter = last30WasteAfter / days30;
+  const wasteReductionPct = baselineWaste > 0
+    ? Math.round(((baselineWaste - avgDailyAfter) / baselineWaste) * 100)
+    : 0;
+
+  return {
+    daysRunning,
+    allTime: {
+      wasteSaved: Math.round(wasteSaved * 100) / 100,
+      total86: parseInt(allTime.rows[0]?.total_86 || 0),
+      labourSaved$,
+      totalSavings: Math.round(totalSavings * 100) / 100,
+      annualised
+    },
+    last30: {
+      waste: last30WasteAfter,
+      incidents86: parseInt(last30.rows[0]?.incidents_86_30 || 0),
+      days: days30
+    },
+    last7: {
+      waste: parseFloat(last7.rows[0]?.waste_7 || 0),
+      incidents86: parseInt(last7.rows[0]?.incidents_86_7 || 0),
+      days: parseInt(last7.rows[0]?.days_7 || 0)
+    },
+    baseline: { avgDailyWaste: Math.round(baselineWaste * 100) / 100 },
+    avgDailyWasteAfter: Math.round(avgDailyAfter * 100) / 100,
+    wasteReductionPct,
+    forecastAccuracy: Math.max(0, 100 - Math.round((parseInt(last30.rows[0]?.incidents_86_30 || 0) / Math.max(days30, 1)) * 100))
+  };
+}
+
+function requireOwnerAuth(req, res, next) {
+  const secret = getOwnerAuthSecret();
+  if (!secret) {
+    return res.status(503).json({
+      error: 'Owner auth is not configured. Set OWNER_AUTH_SECRET (or PREP_RUN_TOKEN).'
+    });
+  }
+
+  const token = extractBearerToken(req.headers.authorization || '');
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    const payload = jwt.verify(token, secret);
+    if (payload?.role !== 'owner' || !payload?.email) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    req.owner = payload;
+    return next();
+  } catch {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+}
+
+async function requireOwnerCafeAccess(req, res, next) {
+  try {
+    const cafeId = parseInt(req.params.cafeId, 10);
+    if (Number.isNaN(cafeId)) {
+      return res.status(400).json({ error: 'Invalid cafe id' });
+    }
+
+    const cafes = await getOwnerCafesByEmail(req.owner.email);
+    const allowedCafe = cafes.find((cafe) => cafe.id === cafeId);
+    if (!allowedCafe) {
+      return res.status(403).json({ error: 'You do not have access to this cafe' });
+    }
+
+    req.ownerCafe = allowedCafe;
+    return next();
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ─── OWNER AUTH ────────────────────────────────────────────────────────────────
+router.post('/owner-auth/request-code', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const secret = getOwnerAuthSecret();
+
+  if (!secret) {
+    return res.status(503).json({
+      error: 'Owner auth is not configured. Set OWNER_AUTH_SECRET (or PREP_RUN_TOKEN).'
+    });
+  }
+
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Valid email is required' });
+  }
+
+  try {
+    const cafes = await getOwnerCafesByEmail(email);
+    if (!cafes.length) {
+      return res.status(404).json({ error: 'No active cafe found for this email' });
+    }
+
+    const code = createOwnerCode();
+    const codeHash = hashOwnerCode(email, code, secret);
+    ownerCodeStore.set(email, {
+      codeHash,
+      expiresAt: Date.now() + OWNER_CODE_TTL_MINUTES * 60 * 1000
+    });
+
+    await emailService.sendOwnerLoginCode({
+      email,
+      code,
+      cafes,
+      expiresMinutes: OWNER_CODE_TTL_MINUTES
+    });
+
+    return res.json({ ok: true, message: 'Verification code sent' });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/owner-auth/verify-code', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const code = String(req.body?.code || '').trim();
+  const secret = getOwnerAuthSecret();
+
+  if (!secret) {
+    return res.status(503).json({
+      error: 'Owner auth is not configured. Set OWNER_AUTH_SECRET (or PREP_RUN_TOKEN).'
+    });
+  }
+
+  if (!isValidEmail(email) || !/^\d{6}$/.test(code)) {
+    return res.status(400).json({ error: 'Email and 6-digit code are required' });
+  }
+
+  try {
+    const stored = ownerCodeStore.get(email);
+    if (!stored || stored.expiresAt < Date.now()) {
+      ownerCodeStore.delete(email);
+      return res.status(401).json({ error: 'Code expired or invalid. Request a new one.' });
+    }
+
+    const expectedHash = stored.codeHash;
+    const submittedHash = hashOwnerCode(email, code, secret);
+    const valid = expectedHash.length === submittedHash.length &&
+      crypto.timingSafeEqual(Buffer.from(expectedHash), Buffer.from(submittedHash));
+
+    if (!valid) {
+      return res.status(401).json({ error: 'Incorrect code' });
+    }
+
+    ownerCodeStore.delete(email);
+    const cafes = await getOwnerCafesByEmail(email);
+    if (!cafes.length) {
+      return res.status(404).json({ error: 'No active cafe found for this account' });
+    }
+
+    const token = jwt.sign(
+      { role: 'owner', email, cafeIds: cafes.map((cafe) => cafe.id) },
+      secret,
+      { expiresIn: `${OWNER_SESSION_TTL_HOURS}h` }
+    );
+
+    return res.json({
+      ok: true,
+      token,
+      owner: {
+        email,
+        cafes
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/owner-auth/me', requireOwnerAuth, async (req, res) => {
+  try {
+    const cafes = await getOwnerCafesByEmail(req.owner.email);
+    if (!cafes.length) {
+      return res.status(403).json({ error: 'No active cafes found for this account' });
+    }
+
+    return res.json({
+      email: req.owner.email,
+      cafes
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/owner/cafes', requireOwnerAuth, async (req, res) => {
+  try {
+    const cafes = await getOwnerCafesByEmail(req.owner.email);
+    return res.json(cafes);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── CAFES ────────────────────────────────────────────────────────────────────
 router.get('/cafes', async (req, res) => {
@@ -656,81 +938,8 @@ router.post('/cafes/:cafeId/logs', async (req, res) => {
 router.get('/cafes/:cafeId/metrics', async (req, res) => {
   const cafeId = req.params.cafeId;
   try {
-    const totalLogs = await pool.query('SELECT COUNT(*) as days FROM daily_logs WHERE cafe_id = $1', [cafeId]);
-    const allTime = await pool.query(`
-      SELECT
-        SUM(waste_value) as total_waste,
-        SUM(items_86d) as total_86,
-        COUNT(*) as days,
-        AVG(actual_covers) as avg_covers
-      FROM daily_logs WHERE cafe_id = $1
-    `, [cafeId]);
-    const last30 = await pool.query(`
-      SELECT
-        SUM(waste_value) as waste_30,
-        SUM(items_86d) as incidents_86_30,
-        COUNT(*) as days_30
-      FROM daily_logs WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '30 days'
-    `, [cafeId]);
-    const last7 = await pool.query(`
-      SELECT
-        SUM(waste_value) as waste_7,
-        SUM(items_86d) as incidents_86_7,
-        COUNT(*) as days_7
-      FROM daily_logs WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '7 days'
-    `, [cafeId]);
-    const baseline = await pool.query(`
-      SELECT AVG(seed.waste_value) as avg_waste
-      FROM (
-        SELECT waste_value
-        FROM daily_logs
-        WHERE cafe_id = $1
-        ORDER BY date ASC
-        LIMIT 7
-      ) seed
-    `, [cafeId]);
-
-    const baselineWaste = parseFloat(baseline.rows[0]?.avg_waste || 0);
-    const totalWaste = parseFloat(allTime.rows[0]?.total_waste || 0);
-    const daysRunning = parseInt(totalLogs.rows[0]?.days || 0);
-    const labourSavedMins = daysRunning * 15;
-    const labourSaved$ = Math.round(labourSavedMins / 60 * 21 * 100) / 100;
-    const projectedWasteWithout = baselineWaste * daysRunning;
-    const wasteSaved = Math.max(0, projectedWasteWithout - totalWaste);
-    const totalSavings = wasteSaved + labourSaved$;
-    const annualised = daysRunning > 0 ? Math.round(totalSavings * (365 / daysRunning)) : 0;
-
-    const last30WasteAfter = parseFloat(last30.rows[0]?.waste_30 || 0);
-    const days30 = parseInt(last30.rows[0]?.days_30 || 1);
-    const avgDailyAfter = last30WasteAfter / days30;
-    const wasteReductionPct = baselineWaste > 0
-      ? Math.round(((baselineWaste - avgDailyAfter) / baselineWaste) * 100)
-      : 0;
-
-    res.json({
-      daysRunning,
-      allTime: {
-        wasteSaved: Math.round(wasteSaved * 100) / 100,
-        total86: parseInt(allTime.rows[0]?.total_86 || 0),
-        labourSaved$,
-        totalSavings: Math.round(totalSavings * 100) / 100,
-        annualised
-      },
-      last30: {
-        waste: last30WasteAfter,
-        incidents86: parseInt(last30.rows[0]?.incidents_86_30 || 0),
-        days: days30
-      },
-      last7: {
-        waste: parseFloat(last7.rows[0]?.waste_7 || 0),
-        incidents86: parseInt(last7.rows[0]?.incidents_86_7 || 0),
-        days: parseInt(last7.rows[0]?.days_7 || 0)
-      },
-      baseline: { avgDailyWaste: Math.round(baselineWaste * 100) / 100 },
-      avgDailyWasteAfter: Math.round(avgDailyAfter * 100) / 100,
-      wasteReductionPct,
-      forecastAccuracy: Math.max(0, 100 - Math.round((parseInt(last30.rows[0]?.incidents_86_30 || 0) / Math.max(days30, 1)) * 100))
-    });
+    const metrics = await buildMetrics(cafeId);
+    res.json(metrics);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -755,6 +964,116 @@ router.post('/cafes/:cafeId/send-prep-list', async (req, res) => {
     if (!cafeResult.rows.length) return res.status(404).json({ error: 'Cafe not found' });
     const cafe = cafeResult.rows[0];
     const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId), date);
+    const emailResult = await emailService.sendPrepList(cafe, forecast);
+    res.json({
+      sent: true,
+      to: emailResult?.to || cafe.kitchen_lead_email || cafe.email,
+      from: emailResult?.from || null,
+      messageId: emailResult?.messageId || null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── OWNER PORTAL DATA ROUTES (TOKEN PROTECTED) ───────────────────────────────
+router.get('/owner/cafes/:cafeId/forecast', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+  try {
+    const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId, 10), date, {
+      persistLearningSnapshot: false
+    });
+    res.json(forecast);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/owner/cafes/:cafeId/prep-list', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+  try {
+    const result = await pool.query(`
+      SELECT * FROM prep_lists WHERE cafe_id = $1 AND date = $2 ORDER BY station, ingredient_name
+    `, [req.params.cafeId, date]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/owner/cafes/:cafeId/prep-list/:prepId', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  const { completed } = req.body;
+  try {
+    const result = await pool.query(
+      'UPDATE prep_lists SET completed = $1 WHERE id = $2 AND cafe_id = $3 RETURNING *',
+      [completed, req.params.prepId, req.params.cafeId]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/owner/cafes/:cafeId/forecast/generate', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  const date = req.body.date || new Date().toISOString().split('T')[0];
+  try {
+    const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId, 10), date);
+    if (!forecast.closed) {
+      await forecastService.savePrepList(req.params.cafeId, date, forecast.prepList);
+    }
+    res.json(forecast);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/owner/cafes/:cafeId/logs', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  const { days = 30 } = req.query;
+  try {
+    const result = await pool.query(`
+      SELECT * FROM daily_logs
+      WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '${parseInt(days, 10)} days'
+      ORDER BY date DESC
+    `, [req.params.cafeId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/owner/cafes/:cafeId/logs', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  const { date, waste_items, waste_value, items_86d, actual_covers, notes } = req.body;
+  try {
+    const result = await pool.query(`
+      INSERT INTO daily_logs (cafe_id, date, waste_items, waste_value, items_86d, actual_covers, notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (cafe_id, date) DO UPDATE SET
+        waste_items = EXCLUDED.waste_items, waste_value = EXCLUDED.waste_value,
+        items_86d = EXCLUDED.items_86d, actual_covers = EXCLUDED.actual_covers, notes = EXCLUDED.notes
+      RETURNING *
+    `, [req.params.cafeId, date, waste_items || 0, waste_value || 0, items_86d || 0, actual_covers || 0, notes || '']);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/owner/cafes/:cafeId/metrics', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  try {
+    const metrics = await buildMetrics(req.params.cafeId);
+    res.json(metrics);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/owner/cafes/:cafeId/send-prep-list', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  const date = req.body.date || new Date().toISOString().split('T')[0];
+  try {
+    const cafeResult = await pool.query('SELECT * FROM cafes WHERE id = $1 AND active = true', [req.params.cafeId]);
+    if (!cafeResult.rows.length) return res.status(404).json({ error: 'Cafe not found' });
+    const cafe = cafeResult.rows[0];
+    const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId, 10), date);
     const emailResult = await emailService.sendPrepList(cafe, forecast);
     res.json({
       sent: true,

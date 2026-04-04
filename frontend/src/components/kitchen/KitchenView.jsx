@@ -16,7 +16,10 @@ const STATION_DOT = {
   Pastry: 'bg-purple-400'
 };
 
-export default function KitchenView({ cafeId, cafeName }) {
+export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
+  const prepClient = dataApi?.prepList || prepListApi;
+  const forecastClient = dataApi?.forecast || forecastApi;
+
   const [prepList, setPrepList] = useState([]);
   const [forecast, setForecast] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -29,8 +32,8 @@ export default function KitchenView({ cafeId, cafeName }) {
     if (!cafeId) return;
     try {
       const [list, fc] = await Promise.all([
-        prepListApi.get(cafeId, today),
-        forecastApi.get(cafeId, today)
+        prepClient.get(cafeId, today),
+        forecastClient.get(cafeId, today)
       ]);
       setPrepList(list);
       setForecast(fc);
@@ -40,17 +43,17 @@ export default function KitchenView({ cafeId, cafeName }) {
     }
   };
 
-  useEffect(() => { load(); }, [cafeId]);
+  useEffect(() => { load(); }, [cafeId, prepClient, forecastClient]);
 
   const handleToggle = async (item) => {
-    const updated = await prepListApi.toggle(cafeId, item.id, !item.completed);
+    const updated = await prepClient.toggle(cafeId, item.id, !item.completed);
     setPrepList(prev => prev.map(p => p.id === item.id ? { ...p, completed: updated.completed } : p));
   };
 
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      await forecastApi.generate(cafeId, today);
+      await forecastClient.generate(cafeId, today);
       await load();
     } finally {
       setGenerating(false);

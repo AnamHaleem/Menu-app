@@ -13,7 +13,12 @@ const fmt$ = (v) => '$' + Math.round(Number(v) || 0).toLocaleString();
 const fmtPct = (v) => Math.round(Number(v) || 0) + '%';
 const fmtMult = (v) => `${Number(v || 1).toFixed(2)}x`;
 
-export default function OwnerDashboard({ cafeId, cafeName }) {
+export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
+  const metricsClient = dataApi?.metrics || metricsApi;
+  const logsClient = dataApi?.logs || logsApi;
+  const weatherClient = dataApi?.weather || weatherApi;
+  const forecastClient = dataApi?.forecast || forecastApi;
+
   const [metrics, setMetrics] = useState(null);
   const [logs, setLogs] = useState([]);
   const [weather, setWeather] = useState(null);
@@ -26,22 +31,22 @@ export default function OwnerDashboard({ cafeId, cafeName }) {
   useEffect(() => {
     if (!cafeId) return;
     Promise.all([
-      metricsApi.get(cafeId),
-      logsApi.get(cafeId, 42),
-      weatherApi.get('Toronto'),
-      forecastApi.get(cafeId, new Date().toISOString().split('T')[0])
+      metricsClient.get(cafeId),
+      logsClient.get(cafeId, 42),
+      weatherClient.get('Toronto'),
+      forecastClient.get(cafeId, new Date().toISOString().split('T')[0])
     ]).then(([m, l, w, f]) => {
       setMetrics(m);
       setLogs(l);
       setWeather(w);
       setForecast(f);
     }).finally(() => setLoading(false));
-  }, [cafeId]);
+  }, [cafeId, metricsClient, logsClient, weatherClient, forecastClient]);
 
   const handleSendPrepList = async () => {
     setSending(true);
     try {
-      const result = await forecastApi.sendEmail(cafeId, new Date().toISOString().split('T')[0]);
+      const result = await forecastClient.sendEmail(cafeId, new Date().toISOString().split('T')[0]);
       const recipient = result?.to || 'recipient email';
       alert(`Prep list sent to ${recipient}`);
     } catch (e) {
@@ -54,9 +59,9 @@ export default function OwnerDashboard({ cafeId, cafeName }) {
 
   const handleLogSubmit = async () => {
     const today = new Date().toISOString().split('T')[0];
-    await logsApi.create(cafeId, { date: today, ...logForm });
-    const updated = await logsApi.get(cafeId, 42);
-    const updatedMetrics = await metricsApi.get(cafeId);
+    await logsClient.create(cafeId, { date: today, ...logForm });
+    const updated = await logsClient.get(cafeId, 42);
+    const updatedMetrics = await metricsClient.get(cafeId);
     setLogs(updated);
     setMetrics(updatedMetrics);
     setShowLogForm(false);

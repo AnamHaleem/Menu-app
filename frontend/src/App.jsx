@@ -4,6 +4,7 @@ import { SignIn, SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import OwnerDashboard from './components/dashboard/OwnerDashboard';
 import KitchenView from './components/kitchen/KitchenView';
 import AdminPanel from './components/admin/AdminPanel';
+import OwnerPortal from './components/owner/OwnerPortal';
 import { cafesApi, metricsApi } from './lib/api';
 import { Spinner, Card, Button } from './components/shared';
 
@@ -33,7 +34,8 @@ function Nav({ cafe, authEnabled }) {
   const links = [
     { to: '/dashboard', label: 'Dashboard' },
     { to: '/kitchen', label: 'Kitchen' },
-    { to: '/admin', label: 'Admin' }
+    { to: '/admin', label: 'Admin' },
+    { to: '/owner', label: 'Owner' }
   ];
 
   return (
@@ -188,6 +190,7 @@ function AppContent({ authEnabled }) {
             element={cafe ? <KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
           />
           <Route path="/admin" element={<AdminPanel onCafeChange={handleCafeChange} currentCafeId={cafe?.id} />} />
+          <Route path="/owner/*" element={<OwnerPortal />} />
           <Route path="*" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
         </Routes>
       </main>

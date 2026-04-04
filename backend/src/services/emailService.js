@@ -126,4 +126,44 @@ async function sendDailyCheckIn(cafe) {
   };
 }
 
-module.exports = { sendPrepList, sendDailyCheckIn };
+async function sendOwnerLoginCode({ email, code, cafes = [], expiresMinutes = 10 }) {
+  const safeEmail = String(email || '').trim();
+  if (!safeEmail) {
+    throw new Error('Owner login email is required');
+  }
+
+  const cafeListHtml = cafes.length
+    ? `<ul style="margin:8px 0 16px 18px;padding:0;color:#374151;font-size:14px;">
+         ${cafes.map((cafe) => `<li>${cafe.name} (${cafe.city || 'Toronto'})</li>`).join('')}
+       </ul>`
+    : '';
+
+  const sendResult = await sendViaResend({
+    from: getFromAddress(),
+    to: safeEmail,
+    subject: 'Menu owner sign-in code',
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;">
+        <h2 style="color:#1F4E79;margin:0 0 8px;">Your Menu sign-in code</h2>
+        <p style="color:#4b5563;font-size:14px;margin:0 0 14px;">
+          Use this code to sign in to your cafe owner portal. It expires in ${expiresMinutes} minutes.
+        </p>
+        <div style="font-size:30px;font-weight:700;letter-spacing:6px;color:#111827;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;display:inline-block;margin:4px 0 14px;">
+          ${code}
+        </div>
+        ${cafeListHtml}
+        <p style="color:#9ca3af;font-size:12px;margin-top:16px;">
+          If you did not request this, you can safely ignore this email.
+        </p>
+      </div>
+    `
+  }, 'owner login code');
+
+  return {
+    to: safeEmail,
+    from: getFromAddress(),
+    messageId: sendResult?.id || null
+  };
+}
+
+module.exports = { sendPrepList, sendDailyCheckIn, sendOwnerLoginCode };

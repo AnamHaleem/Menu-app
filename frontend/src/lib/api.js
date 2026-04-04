@@ -17,6 +17,41 @@ const api = axios.create({
 });
 
 const toArray = (value) => (Array.isArray(value) ? value : []);
+const OWNER_TOKEN_STORAGE_KEY = 'menu.ownerAuthToken';
+
+function readOwnerToken() {
+  try {
+    return (window.localStorage.getItem(OWNER_TOKEN_STORAGE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function saveOwnerToken(token) {
+  try {
+    if (token) {
+      window.localStorage.setItem(OWNER_TOKEN_STORAGE_KEY, String(token));
+    } else {
+      window.localStorage.removeItem(OWNER_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // ignore private mode storage issues
+  }
+}
+
+const ownerApi = axios.create({
+  baseURL: resolveApiBaseUrl(),
+  withCredentials: true
+});
+
+ownerApi.interceptors.request.use((config) => {
+  const token = readOwnerToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
 
 export const cafesApi = {
   getAll: (options = {}) => {
@@ -78,6 +113,44 @@ export const weatherApi = {
 export const transactionsApi = {
   get: (cafeId, days) => api.get(`/cafes/${cafeId}/transactions`, { params: { days } }).then(r => toArray(r.data)),
   bulkImport: (cafeId, transactions) => api.post(`/cafes/${cafeId}/transactions/bulk`, { transactions }).then(r => r.data)
+};
+
+export const ownerAuthApi = {
+  getStoredToken: () => readOwnerToken(),
+  setStoredToken: (token) => saveOwnerToken(token),
+  clearStoredToken: () => saveOwnerToken(''),
+  requestCode: (email) => api.post('/owner-auth/request-code', { email }).then(r => r.data),
+  verifyCode: async (email, code) => {
+    const result = await api.post('/owner-auth/verify-code', { email, code }).then(r => r.data);
+    if (result?.token) {
+      saveOwnerToken(result.token);
+    }
+    return result;
+  },
+  me: () => ownerApi.get('/owner-auth/me').then(r => r.data)
+};
+
+export const ownerPortalApi = {
+  cafes: {
+    getAll: () => ownerApi.get('/owner/cafes').then(r => toArray(r.data))
+  },
+  metrics: {
+    get: (cafeId) => ownerApi.get(`/owner/cafes/${cafeId}/metrics`).then(r => r.data)
+  },
+  logs: {
+    get: (cafeId, days) => ownerApi.get(`/owner/cafes/${cafeId}/logs`, { params: { days } }).then(r => toArray(r.data)),
+    create: (cafeId, data) => ownerApi.post(`/owner/cafes/${cafeId}/logs`, data).then(r => r.data)
+  },
+  forecast: {
+    get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/forecast`, { params: { date } }).then(r => r.data),
+    generate: (cafeId, date) => ownerApi.post(`/owner/cafes/${cafeId}/forecast/generate`, { date }).then(r => r.data),
+    sendEmail: (cafeId, date) => ownerApi.post(`/owner/cafes/${cafeId}/send-prep-list`, { date }).then(r => r.data)
+  },
+  prepList: {
+    get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/prep-list`, { params: { date } }).then(r => toArray(r.data)),
+    toggle: (cafeId, prepId, completed) =>
+      ownerApi.patch(`/owner/cafes/${cafeId}/prep-list/${prepId}`, { completed }).then(r => r.data)
+  }
 };
 
 export default api;
