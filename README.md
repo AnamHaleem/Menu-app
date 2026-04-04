@@ -4,6 +4,7 @@ Daily prep list system for independent cafes. Weather-aware, holiday-aware, and 
 
 Full handover guide:
 - `docs/PROJECT_HANDOVER_GUIDE.md`
+- `docs/NEW_CAFE_ONBOARDING_CHECKLIST.md`
 
 ## Quick Start
 
@@ -95,6 +96,8 @@ Prep dispatch runs every minute and sends when a cafe's `prep_send_time` matches
 |--------|----------|-------------|
 | GET | /api/cafes | List all cafes |
 | POST | /api/cafes | Create cafe |
+| PATCH | /api/cafes/:id | Partial update cafe fields |
+| DELETE | /api/cafes/:id | Soft delete cafe (sets active=false) |
 | PATCH | /api/cafes/:id/prep-time | Set cafe prep send time (`HH:MM`) |
 | GET | /api/cafes/:id/forecast | Get daily forecast |
 | POST | /api/cafes/:id/forecast/generate | Generate and save prep list |

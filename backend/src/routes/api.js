@@ -102,6 +102,112 @@ router.put('/cafes/:id', async (req, res) => {
   }
 });
 
+router.patch('/cafes/:id', async (req, res) => {
+  try {
+    const existing = await pool.query('SELECT * FROM cafes WHERE id = $1', [req.params.id]);
+    if (!existing.rows.length) {
+      return res.status(404).json({ error: 'Cafe not found' });
+    }
+
+    const current = existing.rows[0];
+    const patch = req.body || {};
+
+    const next = {
+      name: patch.name ?? current.name,
+      owner_name: patch.owner_name ?? current.owner_name,
+      email: patch.email ?? current.email,
+      city: patch.city ?? current.city,
+      holiday_behaviour: patch.holiday_behaviour ?? current.holiday_behaviour,
+      kitchen_lead_email: patch.kitchen_lead_email ?? current.kitchen_lead_email,
+      active: patch.active ?? current.active,
+      prep_send_time: patch.prep_send_time ?? current.prep_send_time ?? '06:00'
+    };
+
+    if (!isValidPrepTime(next.prep_send_time)) {
+      return res.status(400).json({ error: 'prep_send_time must be in HH:MM (24-hour) format' });
+    }
+
+    const updated = await pool.query(`
+      UPDATE cafes
+      SET name=$1,
+          owner_name=$2,
+          email=$3,
+          city=$4,
+          holiday_behaviour=$5,
+          kitchen_lead_email=$6,
+          active=$7,
+          prep_send_time=$8
+      WHERE id=$9
+      RETURNING *
+    `, [
+      next.name,
+      next.owner_name,
+      next.email,
+      next.city,
+      next.holiday_behaviour,
+      next.kitchen_lead_email,
+      next.active,
+      next.prep_send_time,
+      req.params.id
+    ]);
+
+    res.json(updated.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/cafes/:id', async (req, res) => {
+  const mode = String(req.query.mode || 'soft').trim().toLowerCase();
+
+  try {
+    if (mode === 'hard') {
+      const expectedToken = String(process.env.ADMIN_DELETE_TOKEN || process.env.PREP_RUN_TOKEN || '').trim();
+      if (!expectedToken) {
+        return res.status(503).json({
+          error: 'ADMIN_DELETE_TOKEN (or PREP_RUN_TOKEN) is not configured on server'
+        });
+      }
+
+      const bearer = extractBearerToken(req.headers.authorization || '');
+      const headerToken = String(req.headers['x-admin-delete-token'] || req.headers['x-prep-run-token'] || '').trim();
+      const providedToken = bearer || headerToken;
+
+      if (!providedToken || providedToken !== expectedToken) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const deleted = await pool.query('DELETE FROM cafes WHERE id = $1 RETURNING *', [req.params.id]);
+      if (!deleted.rows.length) {
+        return res.status(404).json({ error: 'Cafe not found' });
+      }
+
+      return res.json({
+        deleted: true,
+        mode: 'hard',
+        cafe: deleted.rows[0]
+      });
+    }
+
+    const softDeleted = await pool.query(
+      'UPDATE cafes SET active = false WHERE id = $1 RETURNING *',
+      [req.params.id]
+    );
+
+    if (!softDeleted.rows.length) {
+      return res.status(404).json({ error: 'Cafe not found' });
+    }
+
+    res.json({
+      deleted: true,
+      mode: 'soft',
+      cafe: softDeleted.rows[0]
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.patch('/cafes/:id/prep-time', async (req, res) => {
   const { prep_send_time } = req.body || {};
 
