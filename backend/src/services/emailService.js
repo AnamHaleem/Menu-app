@@ -2,11 +2,30 @@ const { Resend } = require('resend');
 require('dotenv').config();
 
 const resend = new Resend(process.env.RESEND_API_KEY);
+const RESEND_FROM_EMAIL = (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
+const RESEND_FROM_NAME = (process.env.RESEND_FROM_NAME || 'Menu').trim();
+
+function getFromAddress() {
+  return `${RESEND_FROM_NAME} <${RESEND_FROM_EMAIL}>`;
+}
+
+async function sendViaResend(payload, contextLabel) {
+  const { data, error } = await resend.emails.send(payload);
+  if (error) {
+    throw new Error(`Resend ${contextLabel} failed: ${error.message || JSON.stringify(error)}`);
+  }
+  return data || null;
+}
 
 async function sendPrepList(cafe, forecast) {
   if (forecast.closed) {
     console.log(`Cafe ${cafe.name} is closed today (${forecast.holiday}). Skipping email.`);
     return;
+  }
+
+  const recipient = (cafe.kitchen_lead_email || cafe.email || '').trim();
+  if (!recipient) {
+    throw new Error(`No recipient email configured for cafe ${cafe.name}`);
   }
 
   const byStation = {};
@@ -63,21 +82,31 @@ async function sendPrepList(cafe, forecast) {
     </div>
   `;
 
-  await resend.emails.send({
-    from: 'Menu <prep@yourdomain.com>',
-    to: cafe.kitchen_lead_email || cafe.email,
+  const sendResult = await sendViaResend({
+    from: getFromAddress(),
+    to: recipient,
     subject: `Prep List — ${forecast.weather.condition} ${forecast.weather.temp}°C — ${new Date(forecast.date).toLocaleDateString('en-CA', { weekday: 'long' })}`,
     html
-  });
+  }, 'prep list');
 
-  console.log(`Prep list sent to ${cafe.kitchen_lead_email || cafe.email}`);
+  console.log(`Prep list sent to ${recipient} (id: ${sendResult?.id || 'n/a'})`);
+  return {
+    to: recipient,
+    from: getFromAddress(),
+    messageId: sendResult?.id || null
+  };
 }
 
 async function sendDailyCheckIn(cafe) {
   const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLScFAtC1mwYRTjRKm3ySIwWvr1OJQ6W_jAs_RhK-UjohC2WOfA/viewform';
-  await resend.emails.send({
-    from: 'Menu <prep@yourdomain.com>',
-    to: cafe.kitchen_lead_email || cafe.email,
+  const recipient = (cafe.kitchen_lead_email || cafe.email || '').trim();
+  if (!recipient) {
+    throw new Error(`No recipient email configured for cafe ${cafe.name}`);
+  }
+
+  const sendResult = await sendViaResend({
+    from: getFromAddress(),
+    to: recipient,
     subject: 'Menu — Daily check-in (2 minutes)',
     html: `
       <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;">
@@ -87,8 +116,14 @@ async function sendDailyCheckIn(cafe) {
         <p style="color:#aaa;font-size:11px;margin-top:24px;">Menu by PrepCast</p>
       </div>
     `
-  });
-  console.log(`Check-in reminder sent to ${cafe.name}`);
+  }, 'daily check-in');
+
+  console.log(`Check-in reminder sent to ${recipient} (id: ${sendResult?.id || 'n/a'})`);
+  return {
+    to: recipient,
+    from: getFromAddress(),
+    messageId: sendResult?.id || null
+  };
 }
 
 module.exports = { sendPrepList, sendDailyCheckIn };

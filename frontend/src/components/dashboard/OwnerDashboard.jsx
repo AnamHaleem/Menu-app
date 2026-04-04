@@ -40,10 +40,12 @@ export default function OwnerDashboard({ cafeId, cafeName }) {
   const handleSendPrepList = async () => {
     setSending(true);
     try {
-      await forecastApi.sendEmail(cafeId, new Date().toISOString().split('T')[0]);
-      alert('Prep list sent successfully');
+      const result = await forecastApi.sendEmail(cafeId, new Date().toISOString().split('T')[0]);
+      const recipient = result?.to || 'recipient email';
+      alert(`Prep list sent to ${recipient}`);
     } catch (e) {
-      alert('Failed to send: ' + e.message);
+      const apiMessage = e?.response?.data?.error;
+      alert('Failed to send: ' + (apiMessage || e.message));
     } finally {
       setSending(false);
     }

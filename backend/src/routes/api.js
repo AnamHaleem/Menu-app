@@ -729,8 +729,13 @@ router.post('/cafes/:cafeId/send-prep-list', async (req, res) => {
     if (!cafeResult.rows.length) return res.status(404).json({ error: 'Cafe not found' });
     const cafe = cafeResult.rows[0];
     const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId), date);
-    await emailService.sendPrepList(cafe, forecast);
-    res.json({ sent: true, to: cafe.kitchen_lead_email || cafe.email });
+    const emailResult = await emailService.sendPrepList(cafe, forecast);
+    res.json({
+      sent: true,
+      to: emailResult?.to || cafe.kitchen_lead_email || cafe.email,
+      from: emailResult?.from || null,
+      messageId: emailResult?.messageId || null
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
