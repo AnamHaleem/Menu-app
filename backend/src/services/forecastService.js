@@ -1,5 +1,6 @@
 const pool = require('../db/pool');
 const weatherService = require('./weatherService');
+const aiDecisionService = require('./aiDecisionService');
 
 const DAY_MULTIPLIERS = {
   'Monday': 0.85, 'Tuesday': 0.90, 'Wednesday': 0.95,
@@ -74,13 +75,35 @@ async function generateForecast(cafeId, targetDate) {
       SELECT item_name, AVG(quantity) as avg_qty
       FROM transactions
       WHERE cafe_id = $1
-        AND date >= NOW() - INTERVAL '28 days'
+        AND date >= ($2::date - INTERVAL '28 days')
+        AND date < $2::date
       GROUP BY item_name
-    `, [cafeId]);
+    `, [cafeId, targetDate]);
 
     const avgByItem = {};
     transactionData.rows.forEach(row => {
       avgByItem[row.item_name] = parseFloat(row.avg_qty);
+    });
+
+    // Item trend signal: last 14 days vs previous 14 days
+    const trendData = await client.query(`
+      SELECT
+        item_name,
+        AVG(CASE WHEN date >= ($2::date - INTERVAL '14 days') AND date < $2::date THEN quantity END) AS last_14_avg,
+        AVG(CASE WHEN date >= ($2::date - INTERVAL '28 days') AND date < ($2::date - INTERVAL '14 days') THEN quantity END) AS prev_14_avg
+      FROM transactions
+      WHERE cafe_id = $1
+        AND date >= ($2::date - INTERVAL '28 days')
+        AND date < $2::date
+      GROUP BY item_name
+    `, [cafeId, targetDate]);
+
+    const itemTrends = {};
+    trendData.rows.forEach(row => {
+      const last14 = parseFloat(row.last_14_avg || 0);
+      const prev14 = parseFloat(row.prev_14_avg || 0);
+      const trendPct = prev14 > 0 ? ((last14 - prev14) / prev14) * 100 : 0;
+      itemTrends[row.item_name] = { last14, prev14, trendPct };
     });
 
     // Get all active items for this cafe
@@ -95,7 +118,40 @@ async function generateForecast(cafeId, targetDate) {
       const avgQty = avgByItem[item.name] || 0;
       const weatherMod = getWeatherModifier(item.name, weather.condition, weather.temp);
       const predicted = Math.round(avgQty * dayMultiplier * weatherMod * holidayModifier);
-      predictions[item.name] = { itemId: item.id, predicted, avgQty, dayMultiplier, weatherMod, holidayModifier };
+      predictions[item.name] = {
+        itemId: item.id,
+        category: item.category,
+        predicted,
+        basePredicted: predicted,
+        avgQty,
+        dayMultiplier,
+        weatherMod,
+        holidayModifier,
+        aiMultiplier: 1
+      };
+    }
+
+    const aiDecision = await aiDecisionService.getForecastAdjustments({
+      cafe: cafeData,
+      targetDate,
+      dayName,
+      weather,
+      isHoliday,
+      holidayName: isHoliday ? holidayCheck.rows[0].holiday_name : null,
+      baselinePredictions: predictions,
+      itemTrends
+    });
+
+    if (aiDecision.applied) {
+      for (const itemName of Object.keys(predictions)) {
+        const globalMultiplier = aiDecision.globalMultiplier || 1;
+        const itemMultiplier = aiDecision.itemMultipliers?.[itemName] || 1;
+        const finalMultiplier = Math.min(2.0, Math.max(0.5, globalMultiplier * itemMultiplier));
+
+        const basePredicted = predictions[itemName].basePredicted || 0;
+        predictions[itemName].aiMultiplier = Math.round(finalMultiplier * 100) / 100;
+        predictions[itemName].predicted = Math.max(0, Math.round(basePredicted * finalMultiplier));
+      }
     }
 
     // Get recipes and calculate ingredient quantities
@@ -137,6 +193,12 @@ async function generateForecast(cafeId, targetDate) {
       isHoliday,
       holidayName: isHoliday ? holidayCheck.rows[0].holiday_name : null,
       holidayBehaviour: isHoliday ? holidayBehaviour : null,
+      aiDecision: {
+        applied: Boolean(aiDecision.applied),
+        model: aiDecision.model || null,
+        notes: aiDecision.notes || aiDecision.reason || '',
+        globalMultiplier: aiDecision.globalMultiplier || 1
+      },
       predictions,
       prepList: Object.values(ingredientTotals).sort((a, b) => a.station.localeCompare(b.station))
     };

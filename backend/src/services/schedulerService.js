@@ -14,8 +14,20 @@ function startScheduler() {
       for (const cafe of cafes.rows) {
         try {
           const forecast = await forecastService.generateForecast(cafe.id, today);
-          await forecastService.savePrepList(cafe.id, today, forecast.prepList || []);
-          await emailService.sendPrepList(cafe, forecast);
+          if (!forecast.closed) {
+            await forecastService.savePrepList(cafe.id, today, forecast.prepList || []);
+            await emailService.sendPrepList(cafe, forecast);
+          } else {
+            console.log(`Skipped ${cafe.name}: closed (${forecast.holiday})`);
+          }
+
+          if (forecast.aiDecision?.applied) {
+            console.log(
+              `AI decision applied for ${cafe.name} using ${forecast.aiDecision.model || 'model'} (x${forecast.aiDecision.globalMultiplier || 1})`
+            );
+          } else {
+            console.log(`AI decision not applied for ${cafe.name}: ${forecast.aiDecision?.notes || 'fallback model used'}`);
+          }
         } catch (err) {
           console.error(`Failed to process cafe ${cafe.name}:`, err.message);
         }

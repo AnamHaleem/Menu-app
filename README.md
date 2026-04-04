@@ -2,6 +2,9 @@
 
 Daily prep list system for independent cafes. Weather-aware, holiday-aware, and API-first.
 
+Full handover guide:
+- `docs/PROJECT_HANDOVER_GUIDE.md`
+
 ## Quick Start
 
 ### Prerequisites
@@ -20,6 +23,11 @@ Set at least:
 - `DATABASE_URL`
 - `RESEND_API_KEY`
 - `OPENWEATHER_API_KEY`
+
+Optional AI decisioning:
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL` (default: `gpt-4.1-mini`)
+- `ENABLE_AI_DECISIONS` (default: `true`)
 
 Run DB setup and start:
 
@@ -59,6 +67,9 @@ Optional:
 - `RESEND_API_KEY=...`
 - `OPENWEATHER_API_KEY=...`
 - `CLERK_SECRET_KEY=...` (optional if using auth)
+- `OPENAI_API_KEY=...` (optional but required for AI decision layer)
+- `OPENAI_MODEL=gpt-4.1-mini` (optional)
+- `ENABLE_AI_DECISIONS=true` (optional)
 
 Backend will run migrations and seed on startup.
 
@@ -83,6 +94,7 @@ Backend will run migrations and seed on startup.
 | PATCH | /api/cafes/:id/prep-list/:prepId | Toggle prep item complete |
 | GET | /api/cafes/:id/metrics | Get dashboard metrics |
 | POST | /api/cafes/:id/logs | Save daily waste/stockout log |
+| POST | /api/cafes/:id/catalog/sync | Bulk sync items, ingredients, recipes |
 | POST | /api/cafes/:id/send-prep-list | Send prep list email |
 | GET | /api/weather | Get weather |
 

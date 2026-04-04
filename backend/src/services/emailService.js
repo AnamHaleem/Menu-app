@@ -38,6 +38,10 @@ async function sendPrepList(cafe, forecast) {
        </div>`
     : '';
 
+  const aiNotice = forecast.aiDecision?.applied
+    ? `<p style="margin:6px 0 0;font-size:12px;color:#6b7280;">AI decision layer applied (${forecast.aiDecision.model || 'model'}).</p>`
+    : '';
+
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f8f8f8;padding:20px;">
       <div style="background:#1F4E79;padding:20px 24px;border-radius:8px 8px 0 0;">
@@ -49,6 +53,7 @@ async function sendPrepList(cafe, forecast) {
           <div>
             <p style="margin:0;font-size:18px;font-weight:600;color:#1F4E79;">${new Date(forecast.date).toLocaleDateString('en-CA', { weekday:'long', month:'long', day:'numeric' })}</p>
             <p style="margin:4px 0 0;font-size:13px;color:#888;">Weather: ${forecast.weather.condition}, ${forecast.weather.temp}°C</p>
+            ${aiNotice}
           </div>
         </div>
         ${holidayWarning}
