@@ -14,6 +14,17 @@ const toNumberOrNull = (value) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
+const toNumberOrZero = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+const parseBooleanValue = (value) => {
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (['true', '1', 'yes'].includes(normalized)) return true;
+  if (['false', '0', 'no'].includes(normalized)) return false;
+  return null;
+};
 
 const PREP_TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const isValidPrepTime = (value) => PREP_TIME_PATTERN.test(String(value || '').trim());
@@ -270,6 +281,117 @@ async function buildMetrics(cafeId) {
     avgDailyWasteAfter: Math.round(avgDailyAfter * 100) / 100,
     wasteReductionPct,
     forecastAccuracy: Math.max(0, 100 - Math.round((parseInt(last30.rows[0]?.incidents_86_30 || 0) / Math.max(days30, 1)) * 100))
+  };
+}
+
+async function buildPrepSummary(cafeId, date) {
+  const rowsResult = await pool.query(
+    `
+      SELECT
+        p.id,
+        p.ingredient_id,
+        p.ingredient_name,
+        p.station,
+        p.unit,
+        p.completed,
+        p.forecast_quantity,
+        p.on_hand_quantity,
+        p.net_quantity,
+        p.quantity_needed,
+        p.actual_prepped_quantity,
+        p.actual_notes,
+        COALESCE(s.sold_qty, 0) AS sold_quantity
+      FROM prep_lists p
+      LEFT JOIN (
+        WITH tx AS (
+          SELECT
+            t.cafe_id,
+            COALESCE(t.item_id, i.id) AS resolved_item_id,
+            SUM(t.quantity)::numeric AS qty
+          FROM transactions t
+          LEFT JOIN items i
+            ON i.cafe_id = t.cafe_id
+           AND LOWER(TRIM(i.name)) = LOWER(TRIM(t.item_name))
+          WHERE t.cafe_id = $1
+            AND t.date::date = $2::date
+          GROUP BY t.cafe_id, COALESCE(t.item_id, i.id)
+        )
+        SELECT
+          r.ingredient_id,
+          SUM(tx.qty * r.qty_per_portion)::numeric AS sold_qty
+        FROM tx
+        JOIN recipes r
+          ON r.cafe_id = tx.cafe_id
+         AND r.item_id = tx.resolved_item_id
+        GROUP BY r.ingredient_id
+      ) s ON s.ingredient_id = p.ingredient_id
+      WHERE p.cafe_id = $1
+        AND p.date = $2::date
+      ORDER BY p.station, p.ingredient_name
+    `,
+    [cafeId, date]
+  );
+
+  const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
+  const varianceTolerance = 0.05;
+
+  const items = rowsResult.rows.map((row) => {
+    const forecastQty = toNumberOrZero(row.forecast_quantity ?? row.quantity_needed);
+    const onHandQty = toNumberOrZero(row.on_hand_quantity);
+    const netQty = toNumberOrZero(row.net_quantity ?? row.quantity_needed);
+    const soldQty = toNumberOrZero(row.sold_quantity);
+    const actualRaw = row.actual_prepped_quantity;
+    const actualPreppedQty =
+      actualRaw === null || actualRaw === undefined ? null : toNumberOrZero(actualRaw);
+    const varianceVsNetQty =
+      actualPreppedQty === null ? null : round2(actualPreppedQty - netQty);
+    const varianceVsSoldQty =
+      actualPreppedQty === null ? null : round2(actualPreppedQty - soldQty);
+
+    return {
+      prepId: row.id,
+      ingredientId: row.ingredient_id,
+      ingredientName: row.ingredient_name,
+      station: row.station,
+      unit: row.unit,
+      completed: Boolean(row.completed),
+      forecastQty: round2(forecastQty),
+      onHandQty: round2(onHandQty),
+      netQty: round2(netQty),
+      soldQty: round2(soldQty),
+      actualPreppedQty: actualPreppedQty === null ? null : round2(actualPreppedQty),
+      actualNotes: row.actual_notes || null,
+      varianceVsNetQty,
+      varianceVsSoldQty
+    };
+  });
+
+  const withActuals = items.filter((item) => item.actualPreppedQty !== null).length;
+  const pendingActualCount = items.length - withActuals;
+
+  let overPreppedCount = 0;
+  let underPreppedCount = 0;
+  for (const item of items) {
+    if (item.varianceVsNetQty === null) continue;
+    if (item.varianceVsNetQty > varianceTolerance) overPreppedCount += 1;
+    else if (item.varianceVsNetQty < -varianceTolerance) underPreppedCount += 1;
+  }
+
+  const completedCount = items.filter((item) => item.completed).length;
+
+  return {
+    cafeId,
+    date,
+    totals: {
+      itemCount: items.length,
+      completedCount,
+      withActuals,
+      pendingActualCount,
+      overPreppedCount,
+      underPreppedCount,
+      onTargetCount: Math.max(0, withActuals - overPreppedCount - underPreppedCount)
+    },
+    items
   };
 }
 
@@ -1249,13 +1371,69 @@ router.get('/cafes/:cafeId/prep-list', async (req, res) => {
 });
 
 router.patch('/cafes/:cafeId/prep-list/:prepId', async (req, res) => {
-  const { completed } = req.body;
+  const completedProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'completed');
+  const actualQtyProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'actual_prepped_quantity');
+  const actualNotesProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'actual_notes');
+
+  if (!completedProvided && !actualQtyProvided && !actualNotesProvided) {
+    return res.status(400).json({ error: 'Nothing to update' });
+  }
+
+  const updates = [];
+  const values = [];
+  let idx = 1;
+
+  if (completedProvided) {
+    const parsedCompleted = parseBooleanValue(req.body.completed);
+    if (parsedCompleted === null) {
+      return res.status(400).json({ error: 'completed must be true or false' });
+    }
+    updates.push(`completed = $${idx++}`);
+    values.push(parsedCompleted);
+  }
+
+  if (actualQtyProvided) {
+    const parsedActual = toNumberOrNull(req.body.actual_prepped_quantity);
+    const isBlank =
+      req.body.actual_prepped_quantity === '' ||
+      req.body.actual_prepped_quantity === null ||
+      req.body.actual_prepped_quantity === undefined;
+    if (!isBlank && parsedActual === null) {
+      return res.status(400).json({ error: 'actual_prepped_quantity must be a number or blank' });
+    }
+    updates.push(`actual_prepped_quantity = $${idx++}`);
+    values.push(parsedActual);
+  }
+
+  if (actualNotesProvided) {
+    const cleanedNotes = String(req.body.actual_notes || '').trim();
+    updates.push(`actual_notes = $${idx++}`);
+    values.push(cleanedNotes || null);
+  }
+
+  updates.push('updated_at = NOW()');
+  values.push(req.params.prepId, req.params.cafeId);
+
   try {
     const result = await pool.query(
-      'UPDATE prep_lists SET completed = $1 WHERE id = $2 AND cafe_id = $3 RETURNING *',
-      [completed, req.params.prepId, req.params.cafeId]
+      `UPDATE prep_lists
+       SET ${updates.join(', ')}
+       WHERE id = $${idx++} AND cafe_id = $${idx++}
+       RETURNING *`,
+      values
     );
+    if (!result.rows.length) return res.status(404).json({ error: 'Prep item not found' });
     res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/cafes/:cafeId/prep-summary', async (req, res) => {
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+  try {
+    const summary = await buildPrepSummary(parseInt(req.params.cafeId, 10), date);
+    res.json(summary);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1374,13 +1552,69 @@ router.get('/owner/cafes/:cafeId/prep-list', requireOwnerAuth, requireOwnerCafeA
 });
 
 router.patch('/owner/cafes/:cafeId/prep-list/:prepId', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
-  const { completed } = req.body;
+  const completedProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'completed');
+  const actualQtyProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'actual_prepped_quantity');
+  const actualNotesProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'actual_notes');
+
+  if (!completedProvided && !actualQtyProvided && !actualNotesProvided) {
+    return res.status(400).json({ error: 'Nothing to update' });
+  }
+
+  const updates = [];
+  const values = [];
+  let idx = 1;
+
+  if (completedProvided) {
+    const parsedCompleted = parseBooleanValue(req.body.completed);
+    if (parsedCompleted === null) {
+      return res.status(400).json({ error: 'completed must be true or false' });
+    }
+    updates.push(`completed = $${idx++}`);
+    values.push(parsedCompleted);
+  }
+
+  if (actualQtyProvided) {
+    const parsedActual = toNumberOrNull(req.body.actual_prepped_quantity);
+    const isBlank =
+      req.body.actual_prepped_quantity === '' ||
+      req.body.actual_prepped_quantity === null ||
+      req.body.actual_prepped_quantity === undefined;
+    if (!isBlank && parsedActual === null) {
+      return res.status(400).json({ error: 'actual_prepped_quantity must be a number or blank' });
+    }
+    updates.push(`actual_prepped_quantity = $${idx++}`);
+    values.push(parsedActual);
+  }
+
+  if (actualNotesProvided) {
+    const cleanedNotes = String(req.body.actual_notes || '').trim();
+    updates.push(`actual_notes = $${idx++}`);
+    values.push(cleanedNotes || null);
+  }
+
+  updates.push('updated_at = NOW()');
+  values.push(req.params.prepId, req.params.cafeId);
+
   try {
     const result = await pool.query(
-      'UPDATE prep_lists SET completed = $1 WHERE id = $2 AND cafe_id = $3 RETURNING *',
-      [completed, req.params.prepId, req.params.cafeId]
+      `UPDATE prep_lists
+       SET ${updates.join(', ')}
+       WHERE id = $${idx++} AND cafe_id = $${idx++}
+       RETURNING *`,
+      values
     );
+    if (!result.rows.length) return res.status(404).json({ error: 'Prep item not found' });
     res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/owner/cafes/:cafeId/prep-summary', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+  try {
+    const summary = await buildPrepSummary(parseInt(req.params.cafeId, 10), date);
+    res.json(summary);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

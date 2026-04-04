@@ -465,7 +465,13 @@ async function generateForecast(cafeId, targetDate, options = {}) {
     // Get recipes and calculate ingredient quantities
     const recipesResult = await client.query(
       `
-      SELECT r.*, i.name as item_name, ing.name as ingredient_name, ing.unit, ing.id as ingredient_id
+      SELECT
+        r.*,
+        i.name as item_name,
+        ing.name as ingredient_name,
+        ing.unit,
+        ing.id as ingredient_id,
+        ing.current_stock
       FROM recipes r
       JOIN items i ON r.item_id = i.id
       JOIN ingredients ing ON r.ingredient_id = ing.id
@@ -485,15 +491,24 @@ async function generateForecast(cafeId, targetDate, options = {}) {
           name: recipe.ingredient_name,
           station: recipe.station,
           unit: recipe.unit,
+          currentStock: Math.max(0, parseFloat(recipe.current_stock || 0)),
           totalNeeded: 0
         };
       }
       ingredientTotals[key].totalNeeded += totalNeeded;
     }
 
-    // Round totals
+    // Round totals and apply stock-aware net need.
     Object.values(ingredientTotals).forEach((ing) => {
-      ing.totalNeeded = Math.round(ing.totalNeeded * 10) / 10;
+      const forecastQty = Math.round((ing.totalNeeded || 0) * 10) / 10;
+      const onHandQty = Math.round((ing.currentStock || 0) * 10) / 10;
+      const netQty = Math.max(0, Math.round((forecastQty - onHandQty) * 10) / 10);
+
+      ing.forecastQty = forecastQty;
+      ing.onHandQty = onHandQty;
+      ing.netQty = netQty;
+      // Keep existing key for compatibility across email + UI.
+      ing.totalNeeded = netQty;
     });
 
     const predictionValues = Object.values(predictions);
@@ -539,14 +554,74 @@ async function savePrepList(cafeId, date, prepList) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM prep_lists WHERE cafe_id = $1 AND date = $2', [cafeId, date]);
+
+    const ingredientIds = prepList
+      .map((item) => parseInt(item.ingredientId, 10))
+      .filter((value) => Number.isInteger(value) && value > 0);
+
+    if (ingredientIds.length > 0) {
+      await client.query(
+        `
+          DELETE FROM prep_lists
+          WHERE cafe_id = $1
+            AND date = $2
+            AND ingredient_id <> ALL($3::int[])
+            AND actual_prepped_quantity IS NULL
+        `,
+        [cafeId, date, ingredientIds]
+      );
+    } else {
+      await client.query(
+        `
+          DELETE FROM prep_lists
+          WHERE cafe_id = $1
+            AND date = $2
+            AND actual_prepped_quantity IS NULL
+        `,
+        [cafeId, date]
+      );
+    }
+
     for (const item of prepList) {
       await client.query(
         `
-        INSERT INTO prep_lists (cafe_id, date, ingredient_id, ingredient_name, station, quantity_needed, unit)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO prep_lists (
+          cafe_id,
+          date,
+          ingredient_id,
+          ingredient_name,
+          station,
+          quantity_needed,
+          forecast_quantity,
+          on_hand_quantity,
+          net_quantity,
+          unit,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        ON CONFLICT (cafe_id, date, ingredient_id)
+        DO UPDATE SET
+          ingredient_name = EXCLUDED.ingredient_name,
+          station = EXCLUDED.station,
+          quantity_needed = EXCLUDED.quantity_needed,
+          forecast_quantity = EXCLUDED.forecast_quantity,
+          on_hand_quantity = EXCLUDED.on_hand_quantity,
+          net_quantity = EXCLUDED.net_quantity,
+          unit = EXCLUDED.unit,
+          updated_at = NOW()
       `,
-        [cafeId, date, item.ingredientId, item.name, item.station, item.totalNeeded, item.unit]
+        [
+          cafeId,
+          date,
+          item.ingredientId,
+          item.name,
+          item.station,
+          item.netQty ?? item.totalNeeded ?? 0,
+          item.forecastQty ?? item.totalNeeded ?? 0,
+          item.onHandQty ?? 0,
+          item.netQty ?? item.totalNeeded ?? 0,
+          item.unit
+        ]
       );
     }
     await client.query('COMMIT');

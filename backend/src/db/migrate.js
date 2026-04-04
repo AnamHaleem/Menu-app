@@ -186,11 +186,69 @@ const migrate = async () => {
         ingredient_name VARCHAR(255),
         station VARCHAR(100),
         quantity_needed DECIMAL(10,2),
+        forecast_quantity DECIMAL(10,2),
+        on_hand_quantity DECIMAL(10,2) DEFAULT 0,
+        net_quantity DECIMAL(10,2),
+        actual_prepped_quantity DECIMAL(10,2),
+        actual_notes TEXT,
         unit VARCHAR(50),
         completed BOOLEAN DEFAULT false,
         notes TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE prep_lists
+      ADD COLUMN IF NOT EXISTS forecast_quantity DECIMAL(10,2);
+    `);
+    await client.query(`
+      ALTER TABLE prep_lists
+      ADD COLUMN IF NOT EXISTS on_hand_quantity DECIMAL(10,2) DEFAULT 0;
+    `);
+    await client.query(`
+      ALTER TABLE prep_lists
+      ADD COLUMN IF NOT EXISTS net_quantity DECIMAL(10,2);
+    `);
+    await client.query(`
+      ALTER TABLE prep_lists
+      ADD COLUMN IF NOT EXISTS actual_prepped_quantity DECIMAL(10,2);
+    `);
+    await client.query(`
+      ALTER TABLE prep_lists
+      ADD COLUMN IF NOT EXISTS actual_notes TEXT;
+    `);
+    await client.query(`
+      ALTER TABLE prep_lists
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+    `);
+
+    await client.query(`
+      UPDATE prep_lists
+      SET forecast_quantity = COALESCE(forecast_quantity, quantity_needed),
+          on_hand_quantity = COALESCE(on_hand_quantity, 0),
+          net_quantity = COALESCE(net_quantity, quantity_needed),
+          updated_at = COALESCE(updated_at, created_at, NOW())
+      WHERE forecast_quantity IS NULL
+         OR net_quantity IS NULL
+         OR on_hand_quantity IS NULL
+         OR updated_at IS NULL;
+    `);
+
+    // Ensure one prep row per ingredient/day/cafe for safe upserts.
+    await client.query(`
+      DELETE FROM prep_lists a
+      USING prep_lists b
+      WHERE a.id > b.id
+        AND a.cafe_id = b.cafe_id
+        AND a.date = b.date
+        AND a.ingredient_id = b.ingredient_id;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_lists_cafe_date_ingredient
+      ON prep_lists (cafe_id, date, ingredient_id);
     `);
 
     await client.query(`

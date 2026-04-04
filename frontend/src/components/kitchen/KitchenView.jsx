@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { prepListApi, forecastApi } from '../../lib/api';
-import { Spinner, Badge, Button, Card } from '../shared';
+import { prepListApi, prepSummaryApi, forecastApi } from '../../lib/api';
+import { Spinner, Button, Card } from '../shared';
 
 const STATION_COLORS = {
   Coffee: 'bg-amber-50 border-amber-200 text-amber-800',
@@ -18,43 +18,143 @@ const STATION_DOT = {
 
 export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
   const prepClient = dataApi?.prepList || prepListApi;
+  const prepSummaryClient = dataApi?.prepSummary || prepSummaryApi;
   const forecastClient = dataApi?.forecast || forecastApi;
 
   const [prepList, setPrepList] = useState([]);
+  const [prepSummary, setPrepSummary] = useState(null);
   const [forecast, setForecast] = useState(null);
+  const [actualInputs, setActualInputs] = useState({});
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [savingToggleId, setSavingToggleId] = useState(null);
+  const [savingActualId, setSavingActualId] = useState(null);
+  const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
 
   const today = new Date().toISOString().split('T')[0];
 
+  const formatQty = (value) => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '0';
+    if (Math.abs(number - Math.round(number)) < 0.001) return String(Math.round(number));
+    return number.toFixed(1).replace(/\.0$/, '');
+  };
+
+  const getErrorMessage = (err, fallback) => err?.response?.data?.error || fallback;
+
+  const getInitialActualInputs = (list) => {
+    const next = {};
+    for (const item of list) {
+      const actual = item.actual_prepped_quantity;
+      next[item.id] = actual === null || actual === undefined ? '' : String(Number(actual));
+    }
+    return next;
+  };
+
+  const loadSummary = async () => {
+    const summary = await prepSummaryClient.get(cafeId, today);
+    setPrepSummary(summary);
+  };
+
   const load = async () => {
     if (!cafeId) return;
+    setError('');
     try {
-      const [list, fc] = await Promise.all([
+      const [list, fc, summary] = await Promise.all([
         prepClient.get(cafeId, today),
-        forecastClient.get(cafeId, today)
+        forecastClient.get(cafeId, today),
+        prepSummaryClient.get(cafeId, today)
       ]);
       setPrepList(list);
       setForecast(fc);
+      setPrepSummary(summary);
+      setActualInputs(getInitialActualInputs(list));
       setLastUpdated(new Date());
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not load prep list.'));
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { load(); }, [cafeId, prepClient, forecastClient]);
+  useEffect(() => {
+    setLoading(true);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cafeId, prepClient, prepSummaryClient, forecastClient]);
 
   const handleToggle = async (item) => {
-    const updated = await prepClient.toggle(cafeId, item.id, !item.completed);
-    setPrepList(prev => prev.map(p => p.id === item.id ? { ...p, completed: updated.completed } : p));
+    setSavingToggleId(item.id);
+    setError('');
+    try {
+      const updated = await prepClient.update(cafeId, item.id, { completed: !item.completed });
+      setPrepList((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, ...updated } : entry)));
+      await loadSummary();
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not update prep item status.'));
+    } finally {
+      setSavingToggleId(null);
+    }
+  };
+
+  const hasActualChanged = (item) => {
+    const draft = String(actualInputs[item.id] ?? '').trim();
+    const current = item.actual_prepped_quantity;
+
+    if (!draft && (current === null || current === undefined)) return false;
+    if (!draft) return true;
+
+    const parsedDraft = Number(draft);
+    if (!Number.isFinite(parsedDraft)) return true;
+
+    const parsedCurrent = current === null || current === undefined ? null : Number(current);
+    if (!Number.isFinite(parsedCurrent)) return true;
+
+    return Math.abs(parsedDraft - parsedCurrent) >= 0.001;
+  };
+
+  const handleActualSave = async (item) => {
+    const raw = String(actualInputs[item.id] ?? '').trim();
+    const parsed = raw === '' ? null : Number(raw);
+
+    if (raw !== '' && !Number.isFinite(parsed)) {
+      setError('Actual prep quantity must be a number.');
+      return;
+    }
+
+    setSavingActualId(item.id);
+    setError('');
+
+    try {
+      const updated = await prepClient.update(cafeId, item.id, {
+        actual_prepped_quantity: parsed
+      });
+
+      setPrepList((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, ...updated } : entry)));
+      setActualInputs((prev) => ({
+        ...prev,
+        [item.id]:
+          updated.actual_prepped_quantity === null || updated.actual_prepped_quantity === undefined
+            ? ''
+            : String(Number(updated.actual_prepped_quantity))
+      }));
+      await loadSummary();
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not save actual prep quantity.'));
+    } finally {
+      setSavingActualId(null);
+    }
   };
 
   const handleGenerate = async () => {
     setGenerating(true);
+    setError('');
     try {
       await forecastClient.generate(cafeId, today);
       await load();
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not regenerate prep list.'));
     } finally {
       setGenerating(false);
     }
@@ -74,6 +174,11 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
   const completedItems = prepList.filter(p => p.completed).length;
   const pct = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
   const allDone = totalItems > 0 && completedItems === totalItems;
+  const summaryTotals = prepSummary?.totals || {};
+  const topVarianceRows = (prepSummary?.items || [])
+    .filter((item) => item.actualPreppedQty !== null)
+    .sort((a, b) => Math.abs(b.varianceVsNetQty || 0) - Math.abs(a.varianceVsNetQty || 0))
+    .slice(0, 6);
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 md:p-6 max-w-3xl mx-auto">
@@ -116,6 +221,12 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
               : 'not active yet. Run backend migrations to enable item-level tuning.'}
           </div>
         )}
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700 mt-3">
+            {error}
+          </div>
+        )}
       </div>
 
       {/* Progress bar */}
@@ -147,6 +258,76 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
         </Card>
       )}
 
+      {/* End-of-day variance summary */}
+      {prepList.length > 0 && (
+        <Card className="p-4 mb-6">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4">
+            <div>
+              <p className="text-sm font-semibold text-gray-900">End-of-day variance</p>
+              <p className="text-xs text-gray-500">Compares net need vs actual prep entered by staff.</p>
+            </div>
+            <p className="text-xs text-gray-500">
+              Actuals captured: <strong className="text-gray-700">{summaryTotals.withActuals || 0}/{summaryTotals.itemCount || prepList.length}</strong>
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+              <p className="text-[11px] uppercase tracking-wide text-gray-400">On target</p>
+              <p className="text-xl font-semibold text-teal-600">{summaryTotals.onTargetCount || 0}</p>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+              <p className="text-[11px] uppercase tracking-wide text-gray-400">Over prepped</p>
+              <p className="text-xl font-semibold text-amber-600">{summaryTotals.overPreppedCount || 0}</p>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+              <p className="text-[11px] uppercase tracking-wide text-gray-400">Under prepped</p>
+              <p className="text-xl font-semibold text-red-600">{summaryTotals.underPreppedCount || 0}</p>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+              <p className="text-[11px] uppercase tracking-wide text-gray-400">Completed checks</p>
+              <p className="text-xl font-semibold text-navy-900">{summaryTotals.completedCount || 0}/{summaryTotals.itemCount || prepList.length}</p>
+            </div>
+          </div>
+
+          {(summaryTotals.pendingActualCount || 0) > 0 && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+              Enter actual prep for {summaryTotals.pendingActualCount} more item(s) to complete today&apos;s variance view.
+            </p>
+          )}
+
+          {topVarianceRows.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    {['Ingredient', 'Net need', 'Actual', 'Variance'].map((heading) => (
+                      <th key={heading} className="text-left text-xs text-gray-400 font-medium px-2 py-2">{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {topVarianceRows.map((row) => {
+                    const variance = Number(row.varianceVsNetQty || 0);
+                    const varianceClass = variance > 0.05 ? 'text-amber-700' : variance < -0.05 ? 'text-red-600' : 'text-teal-600';
+                    const variancePrefix = variance > 0 ? '+' : '';
+
+                    return (
+                      <tr key={`${row.prepId}-${row.ingredientId}`} className="border-b border-gray-50">
+                        <td className="px-2 py-2 text-gray-800 font-medium">{row.ingredientName}</td>
+                        <td className="px-2 py-2 text-gray-600">{formatQty(row.netQty)} {row.unit}</td>
+                        <td className="px-2 py-2 text-gray-700">{formatQty(row.actualPreppedQty)} {row.unit}</td>
+                        <td className={`px-2 py-2 font-semibold ${varianceClass}`}>{variancePrefix}{formatQty(variance)} {row.unit}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* Prep list by station */}
       {Object.entries(byStation).map(([station, items]) => {
         const stationColor = STATION_COLORS[station] || 'bg-gray-50 border-gray-200 text-gray-700';
@@ -164,30 +345,72 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
               {items.map((item, idx) => (
                 <div
                   key={item.id}
-                  className={`flex items-center gap-4 px-4 py-4 cursor-pointer hover:bg-gray-50 transition-colors
+                  className={`px-4 py-3 transition-colors
                     ${idx < items.length - 1 ? 'border-b border-gray-50' : ''}
-                    ${item.completed ? 'opacity-50' : ''}`}
-                  onClick={() => handleToggle(item)}
+                    ${item.completed ? 'opacity-60' : ''}`}
                 >
-                  {/* Checkbox */}
-                  <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all
-                    ${item.completed ? 'bg-teal-500 border-teal-500' : 'border-gray-300'}`}>
-                    {item.completed && (
-                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
+                  <div className="flex items-start gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleToggle(item)}
+                      disabled={savingToggleId === item.id}
+                      className={`mt-0.5 w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all
+                        ${item.completed ? 'bg-teal-500 border-teal-500' : 'border-gray-300'}`}
+                      aria-label={item.completed ? 'Mark as not done' : 'Mark as done'}
+                    >
+                      {item.completed && (
+                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </button>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-3 mb-1">
+                        <p className={`text-base font-medium ${item.completed ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+                          {item.ingredient_name}
+                        </p>
+                        <p className={`text-base font-semibold whitespace-nowrap ${item.completed ? 'text-gray-400' : 'text-navy-900'}`}>
+                          {formatQty(item.net_quantity ?? item.quantity_needed)} {item.unit}
+                        </p>
+                      </div>
+
+                      <p className="text-xs text-gray-500 mb-2">
+                        Forecast {formatQty(item.forecast_quantity ?? item.quantity_needed)} {item.unit}
+                        {' • '}
+                        On hand {formatQty(item.on_hand_quantity)} {item.unit}
+                        {' • '}
+                        Net {formatQty(item.net_quantity ?? item.quantity_needed)} {item.unit}
+                      </p>
+
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-gray-500">Actual prepped</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            value={actualInputs[item.id] ?? ''}
+                            onChange={(event) => setActualInputs((prev) => ({
+                              ...prev,
+                              [item.id]: event.target.value
+                            }))}
+                            className="w-24 border border-gray-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:border-navy-900"
+                          />
+                          <span className="text-xs text-gray-500">{item.unit}</span>
+                        </div>
+
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => handleActualSave(item)}
+                          disabled={savingActualId === item.id || !hasActualChanged(item)}
+                        >
+                          {savingActualId === item.id ? 'Saving...' : 'Save actual'}
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-
-                  {/* Name */}
-                  <span className={`flex-1 text-base font-medium ${item.completed ? 'line-through text-gray-400' : 'text-gray-900'}`}>
-                    {item.ingredient_name}
-                  </span>
-
-                  {/* Quantity */}
-                  <span className={`text-base font-semibold ${item.completed ? 'text-gray-300' : 'text-navy-900'}`}>
-                    {parseFloat(item.quantity_needed)} {item.unit}
-                  </span>
                 </div>
               ))}
             </div>

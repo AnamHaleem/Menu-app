@@ -86,8 +86,13 @@ export const ownerPortalApi = {
   },
   prepList: {
     get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/prep-list`, { params: { date } }).then((response) => toArray(response.data)),
+    update: (cafeId, prepId, payload = {}) =>
+      ownerApi.patch(`/owner/cafes/${cafeId}/prep-list/${prepId}`, payload).then((response) => response.data),
     toggle: (cafeId, prepId, completed) =>
       ownerApi.patch(`/owner/cafes/${cafeId}/prep-list/${prepId}`, { completed }).then((response) => response.data)
+  },
+  prepSummary: {
+    get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/prep-summary`, { params: { date } }).then((response) => response.data)
   },
   weather: weatherApi
 };
@@ -97,5 +102,6 @@ export const metricsApi = ownerPortalApi.metrics;
 export const logsApi = ownerPortalApi.logs;
 export const forecastApi = ownerPortalApi.forecast;
 export const prepListApi = ownerPortalApi.prepList;
+export const prepSummaryApi = ownerPortalApi.prepSummary;
 
 export default publicApi;

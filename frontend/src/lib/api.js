@@ -78,7 +78,13 @@ export const forecastApi = {
 
 export const prepListApi = {
   get: (cafeId, date) => api.get(`/cafes/${cafeId}/prep-list`, { params: { date } }).then(r => toArray(r.data)),
-  toggle: (cafeId, prepId, completed) => api.patch(`/cafes/${cafeId}/prep-list/${prepId}`, { completed }).then(r => r.data)
+  update: (cafeId, prepId, payload = {}) => api.patch(`/cafes/${cafeId}/prep-list/${prepId}`, payload).then(r => r.data),
+  toggle: (cafeId, prepId, completed) =>
+    api.patch(`/cafes/${cafeId}/prep-list/${prepId}`, { completed }).then(r => r.data)
+};
+
+export const prepSummaryApi = {
+  get: (cafeId, date) => api.get(`/cafes/${cafeId}/prep-summary`, { params: { date } }).then(r => r.data)
 };
 
 export const metricsApi = {
@@ -148,8 +154,13 @@ export const ownerPortalApi = {
   },
   prepList: {
     get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/prep-list`, { params: { date } }).then(r => toArray(r.data)),
+    update: (cafeId, prepId, payload = {}) =>
+      ownerApi.patch(`/owner/cafes/${cafeId}/prep-list/${prepId}`, payload).then(r => r.data),
     toggle: (cafeId, prepId, completed) =>
       ownerApi.patch(`/owner/cafes/${cafeId}/prep-list/${prepId}`, { completed }).then(r => r.data)
+  },
+  prepSummary: {
+    get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/prep-summary`, { params: { date } }).then(r => r.data)
   }
 };
 
