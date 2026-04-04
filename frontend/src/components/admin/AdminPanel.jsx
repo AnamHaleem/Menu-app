@@ -3,6 +3,7 @@ import { cafesApi, itemsApi, ingredientsApi, recipesApi, metricsApi } from '../.
 import { Spinner, Badge, Button, Card, SectionHeader, MetricCard } from '../shared';
 
 const fmt$ = (v) => '$' + Math.round(Number(v) || 0).toLocaleString();
+const SELECTED_CAFE_STORAGE_KEY = 'menu.selectedCafeId';
 
 function CafeCard({ cafe, onSelect, selected }) {
   const [metrics, setMetrics] = useState(null);
@@ -60,8 +61,8 @@ function AddCafeForm({ onSave, onCancel }) {
     setError("");
 
     try {
-      await cafesApi.create(form);
-      await onSave();
+      const createdCafe = await cafesApi.create(form);
+      await onSave(createdCafe);
     } catch (err) {
       const apiError = err?.response?.data?.error;
       setError(apiError || "Could not add cafe. Check backend FRONTEND_URL and try again.");
@@ -340,23 +341,87 @@ function CafeDetail({ cafe }) {
   );
 }
 
-export default function AdminPanel() {
+export default function AdminPanel({ onCafeChange, currentCafeId }) {
   const [cafes, setCafes] = useState([]);
   const [selectedCafe, setSelectedCafe] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAddCafe, setShowAddCafe] = useState(false);
 
+  const broadcastCafeSelection = (cafe) => {
+    setSelectedCafe(cafe || null);
+
+    if (cafe?.id) {
+      try {
+        window.localStorage.setItem(SELECTED_CAFE_STORAGE_KEY, String(cafe.id));
+      } catch {
+        // ignore localStorage failures
+      }
+    }
+
+    if (typeof onCafeChange === 'function') {
+      onCafeChange(cafe || null);
+    }
+
+    window.dispatchEvent(new Event('menu:cafe-selected'));
+  };
+
   useEffect(() => {
     cafesApi.getAll().then(data => {
       setCafes(data);
-      if (data.length > 0) setSelectedCafe(data[0]);
+
+      if (!data.length) {
+        broadcastCafeSelection(null);
+        return;
+      }
+
+      let defaultCafe = data[0];
+
+      if (currentCafeId) {
+        const currentCafe = data.find(cafe => cafe.id === currentCafeId);
+        if (currentCafe) defaultCafe = currentCafe;
+      }
+
+      try {
+        const storedCafeId = parseInt(window.localStorage.getItem(SELECTED_CAFE_STORAGE_KEY), 10);
+        if (!Number.isNaN(storedCafeId)) {
+          const storedCafe = data.find(cafe => cafe.id === storedCafeId);
+          if (storedCafe) defaultCafe = storedCafe;
+        }
+      } catch {
+        // ignore localStorage read failures
+      }
+
+      broadcastCafeSelection(defaultCafe);
     }).finally(() => setLoading(false));
   }, []);
 
-  const handleCafeAdded = async () => {
+  const handleCafeAdded = async (createdCafe) => {
     const updated = await cafesApi.getAll();
     setCafes(updated);
     setShowAddCafe(false);
+
+    if (!updated.length) {
+      broadcastCafeSelection(null);
+      return;
+    }
+
+    const createdInList = createdCafe
+      ? updated.find(cafe => cafe.id === createdCafe.id)
+      : null;
+    const existingSelection = selectedCafe
+      ? updated.find(cafe => cafe.id === selectedCafe.id)
+      : null;
+
+    const nextCafe = createdInList
+      || existingSelection
+      || [...updated].sort((a, b) => b.id - a.id)[0]
+      || updated[0];
+
+    broadcastCafeSelection(nextCafe);
+  };
+
+  const handleSelectCafe = (cafe) => {
+    broadcastCafeSelection(cafe);
   };
 
   if (loading) return <Spinner />;
@@ -384,7 +449,7 @@ export default function AdminPanel() {
               <CafeCard
                 key={cafe.id}
                 cafe={cafe}
-                onSelect={setSelectedCafe}
+                onSelect={handleSelectCafe}
                 selected={selectedCafe?.id === cafe.id}
               />
             ))}
