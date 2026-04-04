@@ -549,7 +549,9 @@ router.post('/cafes/:cafeId/transactions/bulk', async (req, res) => {
 router.get('/cafes/:cafeId/forecast', async (req, res) => {
   const date = req.query.date || new Date().toISOString().split('T')[0];
   try {
-    const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId), date);
+    const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId), date, {
+      persistLearningSnapshot: false
+    });
     res.json(forecast);
   } catch (err) {
     res.status(500).json({ error: err.message });

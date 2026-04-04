@@ -30,6 +30,13 @@ Optional AI decisioning:
 - `OPENAI_MODEL` (default: `gpt-4.1-mini`)
 - `ENABLE_AI_DECISIONS` (default: `true`)
 
+Optional auto-learning controls:
+- `LEARNING_RATIO_MIN` (default: `0.75`)
+- `LEARNING_RATIO_MAX` (default: `1.25`)
+- `LEARNING_HISTORY_DAYS` (default: `60`)
+- `LEARNING_MAX_SAMPLES_PER_ITEM` (default: `21`)
+- `LEARNING_CONFIDENCE_SAMPLES` (default: `8`)
+
 Optional scheduling controls:
 - `PREP_TIMEZONE` (default: `America/Toronto`)
 - `PREP_RUN_TOKEN` (required only for protected manual "run prep now" endpoint)
@@ -75,6 +82,11 @@ Optional:
 - `OPENAI_API_KEY=...` (optional but required for AI decision layer)
 - `OPENAI_MODEL=gpt-4.1-mini` (optional)
 - `ENABLE_AI_DECISIONS=true` (optional)
+- `LEARNING_RATIO_MIN=0.75` (optional)
+- `LEARNING_RATIO_MAX=1.25` (optional)
+- `LEARNING_HISTORY_DAYS=60` (optional)
+- `LEARNING_MAX_SAMPLES_PER_ITEM=21` (optional)
+- `LEARNING_CONFIDENCE_SAMPLES=8` (optional)
 - `PREP_TIMEZONE=America/Toronto` (optional)
 - `PREP_RUN_TOKEN=strong-secret-token` (required for manual run endpoint)
 

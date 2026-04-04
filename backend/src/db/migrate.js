@@ -172,6 +172,58 @@ const migrate = async () => {
       ON prep_dispatch_logs (cafe_id, dispatch_date);
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS forecast_item_actuals (
+        id SERIAL PRIMARY KEY,
+        cafe_id INTEGER REFERENCES cafes(id) ON DELETE CASCADE,
+        forecast_date DATE NOT NULL,
+        item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+        item_name VARCHAR(255) NOT NULL,
+        predicted_qty DECIMAL(10,2) NOT NULL DEFAULT 0,
+        base_predicted_qty DECIMAL(10,2) NOT NULL DEFAULT 0,
+        avg_qty DECIMAL(10,2) NOT NULL DEFAULT 0,
+        day_multiplier DECIMAL(10,4) NOT NULL DEFAULT 1,
+        weather_modifier DECIMAL(10,4) NOT NULL DEFAULT 1,
+        holiday_modifier DECIMAL(10,4) NOT NULL DEFAULT 1,
+        learning_multiplier DECIMAL(10,4) NOT NULL DEFAULT 1,
+        ai_multiplier DECIMAL(10,4) NOT NULL DEFAULT 1,
+        ai_applied BOOLEAN NOT NULL DEFAULT false,
+        actual_qty DECIMAL(10,2),
+        error_pct DECIMAL(10,2),
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_forecast_item_actuals_unique
+      ON forecast_item_actuals (cafe_id, forecast_date, item_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_forecast_item_actuals_cafe_date
+      ON forecast_item_actuals (cafe_id, forecast_date);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS item_learning_state (
+        id SERIAL PRIMARY KEY,
+        cafe_id INTEGER REFERENCES cafes(id) ON DELETE CASCADE,
+        item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+        multiplier DECIMAL(10,4) NOT NULL DEFAULT 1,
+        raw_ratio DECIMAL(10,4),
+        samples INTEGER NOT NULL DEFAULT 0,
+        last_trained_at TIMESTAMP DEFAULT NOW(),
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_item_learning_state_unique
+      ON item_learning_state (cafe_id, item_id);
+    `);
+
     await client.query('COMMIT');
     console.log('Migration completed successfully');
   } catch (err) {
