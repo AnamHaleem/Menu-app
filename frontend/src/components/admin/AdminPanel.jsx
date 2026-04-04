@@ -130,7 +130,7 @@ function AddCafeForm({ onSave, onCancel }) {
   );
 }
 
-function CafeDetail({ cafe, onCafeDeleted }) {
+function CafeDetail({ cafe, onCafeDeleted, onCafeUpdated }) {
   const [tab, setTab] = useState('menu');
   const [items, setItems] = useState([]);
   const [ingredients, setIngredients] = useState([]);
@@ -144,6 +144,17 @@ function CafeDetail({ cafe, onCafeDeleted }) {
   const [prepTimeMessage, setPrepTimeMessage] = useState('');
   const [deletingCafe, setDeletingCafe] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState('');
+  const [editingCafeInfo, setEditingCafeInfo] = useState(false);
+  const [savingCafeInfo, setSavingCafeInfo] = useState(false);
+  const [cafeInfoMessage, setCafeInfoMessage] = useState('');
+  const [cafeInfoForm, setCafeInfoForm] = useState({
+    name: cafe.name || '',
+    owner_name: cafe.owner_name || '',
+    email: cafe.email || '',
+    kitchen_lead_email: cafe.kitchen_lead_email || '',
+    city: cafe.city || 'Toronto',
+    holiday_behaviour: cafe.holiday_behaviour || 'Manual'
+  });
 
   useEffect(() => {
     Promise.all([
@@ -163,6 +174,20 @@ function CafeDetail({ cafe, onCafeDeleted }) {
     setPrepSendTime(cafe.prep_send_time || '06:00');
     setPrepTimeMessage('');
   }, [cafe.id, cafe.prep_send_time]);
+
+  useEffect(() => {
+    setEditingCafeInfo(false);
+    setSavingCafeInfo(false);
+    setCafeInfoMessage('');
+    setCafeInfoForm({
+      name: cafe.name || '',
+      owner_name: cafe.owner_name || '',
+      email: cafe.email || '',
+      kitchen_lead_email: cafe.kitchen_lead_email || '',
+      city: cafe.city || 'Toronto',
+      holiday_behaviour: cafe.holiday_behaviour || 'Manual'
+    });
+  }, [cafe.id, cafe.name, cafe.owner_name, cafe.email, cafe.kitchen_lead_email, cafe.city, cafe.holiday_behaviour]);
 
   const handleAddItem = async () => {
     await itemsApi.create(cafe.id, newItem);
@@ -184,14 +209,63 @@ function CafeDetail({ cafe, onCafeDeleted }) {
     setSavingPrepTime(true);
     setPrepTimeMessage('');
     try {
-      await cafesApi.setPrepTime(cafe.id, prepSendTime);
+      const updatedCafe = await cafesApi.setPrepTime(cafe.id, prepSendTime);
       setPrepTimeMessage('Prep email time saved.');
+      if (typeof onCafeUpdated === 'function') {
+        onCafeUpdated(updatedCafe);
+      }
     } catch (err) {
       const apiError = err?.response?.data?.error;
       setPrepTimeMessage(apiError || 'Could not save prep email time.');
     } finally {
       setSavingPrepTime(false);
     }
+  };
+
+  const handleSaveCafeInfo = async () => {
+    if (!cafeInfoForm.name.trim() || !cafeInfoForm.email.trim()) {
+      setCafeInfoMessage('Cafe name and owner email are required.');
+      return;
+    }
+
+    setSavingCafeInfo(true);
+    setCafeInfoMessage('');
+
+    try {
+      const updatedCafe = await cafesApi.patch(cafe.id, {
+        name: cafeInfoForm.name.trim(),
+        owner_name: cafeInfoForm.owner_name.trim(),
+        email: cafeInfoForm.email.trim(),
+        kitchen_lead_email: cafeInfoForm.kitchen_lead_email.trim(),
+        city: cafeInfoForm.city.trim(),
+        holiday_behaviour: cafeInfoForm.holiday_behaviour
+      });
+
+      setCafeInfoMessage('Cafe info updated.');
+      setEditingCafeInfo(false);
+
+      if (typeof onCafeUpdated === 'function') {
+        onCafeUpdated(updatedCafe);
+      }
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setCafeInfoMessage(apiError || 'Could not update cafe info.');
+    } finally {
+      setSavingCafeInfo(false);
+    }
+  };
+
+  const handleCancelCafeInfoEdit = () => {
+    setEditingCafeInfo(false);
+    setCafeInfoMessage('');
+    setCafeInfoForm({
+      name: cafe.name || '',
+      owner_name: cafe.owner_name || '',
+      email: cafe.email || '',
+      kitchen_lead_email: cafe.kitchen_lead_email || '',
+      city: cafe.city || 'Toronto',
+      holiday_behaviour: cafe.holiday_behaviour || 'Manual'
+    });
   };
 
   const handleDeleteCafe = async () => {
@@ -376,21 +450,71 @@ function CafeDetail({ cafe, onCafeDeleted }) {
       {/* Settings tab */}
       {tab === 'settings' && (
         <Card className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-xs text-gray-400">Cafe information</p>
+            {!editingCafeInfo && (
+              <Button size="sm" variant="secondary" onClick={() => setEditingCafeInfo(true)}>
+                Edit info
+              </Button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {[
-              { label: 'Café name', value: cafe.name },
-              { label: 'Owner name', value: cafe.owner_name },
-              { label: 'Owner email', value: cafe.email },
-              { label: 'Kitchen lead email', value: cafe.kitchen_lead_email },
-              { label: 'City', value: cafe.city },
-              { label: 'Holiday behaviour', value: cafe.holiday_behaviour }
-            ].map(({ label, value }) => (
-              <div key={label}>
+              { key: 'name', label: 'Café name' },
+              { key: 'owner_name', label: 'Owner name' },
+              { key: 'email', label: 'Owner email' },
+              { key: 'kitchen_lead_email', label: 'Kitchen lead email' },
+              { key: 'city', label: 'City' }
+            ].map(({ key, label }) => (
+              <div key={key}>
                 <p className="text-xs text-gray-400 mb-1">{label}</p>
-                <p className="text-sm font-medium text-gray-900">{value || '—'}</p>
+                {editingCafeInfo ? (
+                  <input
+                    value={cafeInfoForm[key]}
+                    onChange={(e) => setCafeInfoForm((prev) => ({ ...prev, [key]: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                  />
+                ) : (
+                  <p className="text-sm font-medium text-gray-900">{cafeInfoForm[key] || '—'}</p>
+                )}
               </div>
             ))}
+            <div>
+              <p className="text-xs text-gray-400 mb-1">Holiday behaviour</p>
+              {editingCafeInfo ? (
+                <select
+                  value={cafeInfoForm.holiday_behaviour}
+                  onChange={(e) => setCafeInfoForm((prev) => ({ ...prev, holiday_behaviour: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                >
+                  <option>Manual</option>
+                  <option>Reduced</option>
+                  <option>Closed</option>
+                  <option>Sunday pattern</option>
+                </select>
+              ) : (
+                <p className="text-sm font-medium text-gray-900">{cafeInfoForm.holiday_behaviour || '—'}</p>
+              )}
+            </div>
           </div>
+
+          {cafeInfoMessage && (
+            <p className={`text-xs mt-3 ${cafeInfoMessage.includes('updated') ? 'text-teal-600' : 'text-red-600'}`}>
+              {cafeInfoMessage}
+            </p>
+          )}
+
+          {editingCafeInfo && (
+            <div className="mt-4 flex gap-2">
+              <Button size="sm" onClick={handleSaveCafeInfo} disabled={savingCafeInfo}>
+                {savingCafeInfo ? 'Saving...' : 'Save changes'}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={handleCancelCafeInfoEdit} disabled={savingCafeInfo}>
+                Cancel
+              </Button>
+            </div>
+          )}
 
           <div className="mt-6 pt-6 border-t border-gray-100">
             <p className="text-xs text-gray-400 mb-2">Prep email time (Toronto timezone)</p>
@@ -537,6 +661,12 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
     broadcastCafeSelection(nextCafe);
   };
 
+  const handleCafeUpdated = (updatedCafe) => {
+    if (!updatedCafe?.id) return;
+    setCafes((prev) => prev.map((cafe) => (cafe.id === updatedCafe.id ? updatedCafe : cafe)));
+    broadcastCafeSelection(updatedCafe);
+  };
+
   if (loading) return <Spinner />;
 
   return (
@@ -577,7 +707,7 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
         {/* Cafe detail */}
         <div className="md:col-span-2">
           {selectedCafe
-            ? <CafeDetail cafe={selectedCafe} onCafeDeleted={handleCafeDeleted} />
+            ? <CafeDetail cafe={selectedCafe} onCafeDeleted={handleCafeDeleted} onCafeUpdated={handleCafeUpdated} />
             : <div className="text-center py-16 text-sm text-gray-400">Select a café to view details</div>
           }
         </div>

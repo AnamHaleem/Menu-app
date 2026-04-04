@@ -23,6 +23,7 @@ export const cafesApi = {
   getOne: (id) => api.get(`/cafes/${id}`).then(r => r.data),
   create: (data) => api.post('/cafes', data).then(r => r.data),
   update: (id, data) => api.put(`/cafes/${id}`, data).then(r => r.data),
+  patch: (id, data) => api.patch(`/cafes/${id}`, data).then(r => r.data),
   delete: (id, options = {}) => {
     const params = options.hard ? { mode: 'hard' } : undefined;
     const headers = options.token ? { 'x-admin-delete-token': options.token } : undefined;
