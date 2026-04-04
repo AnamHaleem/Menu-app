@@ -29,6 +29,10 @@ Optional AI decisioning:
 - `OPENAI_MODEL` (default: `gpt-4.1-mini`)
 - `ENABLE_AI_DECISIONS` (default: `true`)
 
+Optional scheduling controls:
+- `PREP_TIMEZONE` (default: `America/Toronto`)
+- `PREP_RUN_TOKEN` (required only for protected manual "run prep now" endpoint)
+
 Run DB setup and start:
 
 ```bash
@@ -70,8 +74,11 @@ Optional:
 - `OPENAI_API_KEY=...` (optional but required for AI decision layer)
 - `OPENAI_MODEL=gpt-4.1-mini` (optional)
 - `ENABLE_AI_DECISIONS=true` (optional)
+- `PREP_TIMEZONE=America/Toronto` (optional)
+- `PREP_RUN_TOKEN=strong-secret-token` (required for manual run endpoint)
 
 Backend will run migrations and seed on startup.
+Prep dispatch runs every minute and sends when a cafe's `prep_send_time` matches the current time in `PREP_TIMEZONE`.
 
 ## Deploy Frontend (Vercel)
 
@@ -88,6 +95,7 @@ Backend will run migrations and seed on startup.
 |--------|----------|-------------|
 | GET | /api/cafes | List all cafes |
 | POST | /api/cafes | Create cafe |
+| PATCH | /api/cafes/:id/prep-time | Set cafe prep send time (`HH:MM`) |
 | GET | /api/cafes/:id/forecast | Get daily forecast |
 | POST | /api/cafes/:id/forecast/generate | Generate and save prep list |
 | GET | /api/cafes/:id/prep-list | Get prep list |
@@ -96,6 +104,7 @@ Backend will run migrations and seed on startup.
 | POST | /api/cafes/:id/logs | Save daily waste/stockout log |
 | POST | /api/cafes/:id/catalog/sync | Bulk sync items, ingredients, recipes |
 | POST | /api/cafes/:id/send-prep-list | Send prep list email |
+| POST | /api/admin/run-prep-now | Protected manual trigger for prep job |
 | GET | /api/weather | Get weather |
 
 ## Views

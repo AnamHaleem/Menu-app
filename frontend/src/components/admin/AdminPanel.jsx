@@ -46,7 +46,8 @@ function CafeCard({ cafe, onSelect, selected }) {
 function AddCafeForm({ onSave, onCancel }) {
   const [form, setForm] = useState({
     name: "", owner_name: "", email: "", city: "Toronto",
-    holiday_behaviour: "Manual", kitchen_lead_email: ""
+    holiday_behaviour: "Manual", kitchen_lead_email: "",
+    prep_send_time: "06:00"
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -104,6 +105,15 @@ function AddCafeForm({ onSave, onCancel }) {
             <option>Sunday pattern</option>
           </select>
         </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Prep email time</label>
+          <input
+            type="time"
+            value={form.prep_send_time}
+            onChange={e => setForm(p => ({ ...p, prep_send_time: e.target.value }))}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+          />
+        </div>
       </div>
 
       {error && (
@@ -129,6 +139,9 @@ function CafeDetail({ cafe }) {
   const [loading, setLoading] = useState(true);
   const [showAddItem, setShowAddItem] = useState(false);
   const [newItem, setNewItem] = useState({ name: '', category: 'Beverage', price: '' });
+  const [prepSendTime, setPrepSendTime] = useState(cafe.prep_send_time || '06:00');
+  const [savingPrepTime, setSavingPrepTime] = useState(false);
+  const [prepTimeMessage, setPrepTimeMessage] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -144,6 +157,11 @@ function CafeDetail({ cafe }) {
     }).finally(() => setLoading(false));
   }, [cafe.id]);
 
+  useEffect(() => {
+    setPrepSendTime(cafe.prep_send_time || '06:00');
+    setPrepTimeMessage('');
+  }, [cafe.id, cafe.prep_send_time]);
+
   const handleAddItem = async () => {
     await itemsApi.create(cafe.id, newItem);
     const updated = await itemsApi.get(cafe.id);
@@ -156,6 +174,22 @@ function CafeDetail({ cafe }) {
     await itemsApi.update(cafe.id, item.id, { ...item, active: !item.active });
     const updated = await itemsApi.get(cafe.id);
     setItems(updated);
+  };
+
+  const handleSavePrepTime = async () => {
+    if (!prepSendTime) return;
+
+    setSavingPrepTime(true);
+    setPrepTimeMessage('');
+    try {
+      await cafesApi.setPrepTime(cafe.id, prepSendTime);
+      setPrepTimeMessage('Prep email time saved.');
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setPrepTimeMessage(apiError || 'Could not save prep email time.');
+    } finally {
+      setSavingPrepTime(false);
+    }
   };
 
   if (loading) return <Spinner />;
@@ -332,8 +366,25 @@ function CafeDetail({ cafe }) {
               </div>
             ))}
           </div>
+
           <div className="mt-6 pt-6 border-t border-gray-100">
-            <p className="text-xs text-gray-400 mb-3">To update café settings contact support or edit directly in your database.</p>
+            <p className="text-xs text-gray-400 mb-2">Prep email time (Toronto timezone)</p>
+            <div className="flex items-center gap-2 max-w-xs">
+              <input
+                type="time"
+                value={prepSendTime}
+                onChange={e => setPrepSendTime(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+              <Button size="sm" onClick={handleSavePrepTime} disabled={savingPrepTime}>
+                {savingPrepTime ? 'Saving...' : 'Save'}
+              </Button>
+            </div>
+            {prepTimeMessage && (
+              <p className={`text-xs mt-2 ${prepTimeMessage.includes('saved') ? 'text-teal-600' : 'text-red-600'}`}>
+                {prepTimeMessage}
+              </p>
+            )}
           </div>
         </Card>
       )}

@@ -23,9 +23,15 @@ const migrate = async () => {
         city VARCHAR(100) DEFAULT 'Toronto',
         holiday_behaviour VARCHAR(50) DEFAULT 'Manual',
         kitchen_lead_email VARCHAR(255),
+        prep_send_time VARCHAR(5) NOT NULL DEFAULT '06:00',
         active BOOLEAN DEFAULT true,
         created_at TIMESTAMP DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE cafes
+      ADD COLUMN IF NOT EXISTS prep_send_time VARCHAR(5) NOT NULL DEFAULT '06:00';
     `);
 
     await client.query(`
@@ -144,6 +150,26 @@ const migrate = async () => {
         temp_c DECIMAL(5,2),
         created_at TIMESTAMP DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS prep_dispatch_logs (
+        id SERIAL PRIMARY KEY,
+        cafe_id INTEGER REFERENCES cafes(id) ON DELETE CASCADE,
+        dispatch_date DATE NOT NULL,
+        scheduled_time VARCHAR(5) NOT NULL DEFAULT '06:00',
+        source VARCHAR(50) NOT NULL DEFAULT 'scheduler_tick',
+        status VARCHAR(50) NOT NULL DEFAULT 'running',
+        details TEXT,
+        sent_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_dispatch_logs_cafe_date
+      ON prep_dispatch_logs (cafe_id, dispatch_date);
     `);
 
     await client.query('COMMIT');

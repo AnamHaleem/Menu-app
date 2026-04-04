@@ -4,12 +4,20 @@ const pool = require('../db/pool');
 const forecastService = require('../services/forecastService');
 const weatherService = require('../services/weatherService');
 const emailService = require('../services/emailService');
+const schedulerService = require('../services/schedulerService');
 
 const toKey = (value) => String(value || '').trim().toLowerCase();
 const toNumberOrNull = (value) => {
   if (value === '' || value === null || value === undefined) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+const PREP_TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const isValidPrepTime = (value) => PREP_TIME_PATTERN.test(String(value || '').trim());
+const extractBearerToken = (authHeader = '') => {
+  const match = String(authHeader).match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : '';
 };
 
 // ─── CAFES ────────────────────────────────────────────────────────────────────
@@ -33,12 +41,25 @@ router.get('/cafes/:id', async (req, res) => {
 });
 
 router.post('/cafes', async (req, res) => {
-  const { name, owner_name, email, city, holiday_behaviour, kitchen_lead_email } = req.body;
+  const {
+    name,
+    owner_name,
+    email,
+    city,
+    holiday_behaviour,
+    kitchen_lead_email,
+    prep_send_time
+  } = req.body;
   try {
+    const prepSendTime = prep_send_time || '06:00';
+    if (!isValidPrepTime(prepSendTime)) {
+      return res.status(400).json({ error: 'prep_send_time must be in HH:MM (24-hour) format' });
+    }
+
     const result = await pool.query(`
-      INSERT INTO cafes (name, owner_name, email, city, holiday_behaviour, kitchen_lead_email)
-      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
-    `, [name, owner_name, email, city || 'Toronto', holiday_behaviour || 'Manual', kitchen_lead_email]);
+      INSERT INTO cafes (name, owner_name, email, city, holiday_behaviour, kitchen_lead_email, prep_send_time)
+      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
+    `, [name, owner_name, email, city || 'Toronto', holiday_behaviour || 'Manual', kitchen_lead_email, prepSendTime]);
     res.status(201).json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -46,12 +67,58 @@ router.post('/cafes', async (req, res) => {
 });
 
 router.put('/cafes/:id', async (req, res) => {
-  const { name, owner_name, email, city, holiday_behaviour, kitchen_lead_email, active } = req.body;
+  const {
+    name,
+    owner_name,
+    email,
+    city,
+    holiday_behaviour,
+    kitchen_lead_email,
+    active,
+    prep_send_time
+  } = req.body;
   try {
+    const prepSendTime = prep_send_time || '06:00';
+    if (!isValidPrepTime(prepSendTime)) {
+      return res.status(400).json({ error: 'prep_send_time must be in HH:MM (24-hour) format' });
+    }
+
     const result = await pool.query(`
-      UPDATE cafes SET name=$1, owner_name=$2, email=$3, city=$4, holiday_behaviour=$5, kitchen_lead_email=$6, active=$7
-      WHERE id=$8 RETURNING *
-    `, [name, owner_name, email, city, holiday_behaviour, kitchen_lead_email, active, req.params.id]);
+      UPDATE cafes
+      SET name=$1,
+          owner_name=$2,
+          email=$3,
+          city=$4,
+          holiday_behaviour=$5,
+          kitchen_lead_email=$6,
+          active=$7,
+          prep_send_time=$8
+      WHERE id=$9
+      RETURNING *
+    `, [name, owner_name, email, city, holiday_behaviour, kitchen_lead_email, active, prepSendTime, req.params.id]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/cafes/:id/prep-time', async (req, res) => {
+  const { prep_send_time } = req.body || {};
+
+  if (!isValidPrepTime(prep_send_time)) {
+    return res.status(400).json({ error: 'prep_send_time must be in HH:MM (24-hour) format' });
+  }
+
+  try {
+    const result = await pool.query(
+      'UPDATE cafes SET prep_send_time = $1 WHERE id = $2 RETURNING *',
+      [prep_send_time, req.params.id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Cafe not found' });
+    }
+
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -558,6 +625,43 @@ router.post('/cafes/:cafeId/send-prep-list', async (req, res) => {
     const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId), date);
     await emailService.sendPrepList(cafe, forecast);
     res.json({ sent: true, to: cafe.kitchen_lead_email || cafe.email });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── MANUAL PREP DISPATCH (PROTECTED) ───────────────────────────────────────
+router.post('/admin/run-prep-now', async (req, res) => {
+  const expectedToken = String(process.env.PREP_RUN_TOKEN || '').trim();
+
+  if (!expectedToken) {
+    return res.status(503).json({
+      error: 'PREP_RUN_TOKEN is not configured on server'
+    });
+  }
+
+  const bearer = extractBearerToken(req.headers.authorization || '');
+  const headerToken = String(req.headers['x-prep-run-token'] || '').trim();
+  const providedToken = bearer || headerToken;
+
+  if (!providedToken || providedToken !== expectedToken) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { cafeIds = [], date = null, force = true } = req.body || {};
+
+  if (date && Number.isNaN(Date.parse(date))) {
+    return res.status(400).json({ error: 'date must be ISO-like (YYYY-MM-DD)' });
+  }
+
+  try {
+    const result = await schedulerService.runPrepNow({
+      cafeIds,
+      dispatchDate: date,
+      force: Boolean(force),
+      source: 'manual_api'
+    });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

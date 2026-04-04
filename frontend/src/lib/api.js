@@ -22,7 +22,8 @@ export const cafesApi = {
   getAll: () => api.get('/cafes').then(r => toArray(r.data)),
   getOne: (id) => api.get(`/cafes/${id}`).then(r => r.data),
   create: (data) => api.post('/cafes', data).then(r => r.data),
-  update: (id, data) => api.put(`/cafes/${id}`, data).then(r => r.data)
+  update: (id, data) => api.put(`/cafes/${id}`, data).then(r => r.data),
+  setPrepTime: (id, prep_send_time) => api.patch(`/cafes/${id}/prep-time`, { prep_send_time }).then(r => r.data)
 };
 
 export const forecastApi = {
