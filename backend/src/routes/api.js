@@ -19,6 +19,23 @@ const extractBearerToken = (authHeader = '') => {
   const match = String(authHeader).match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : '';
 };
+const isCafeEmailConflict = (err) => {
+  if (!err || err.code !== '23505') return false;
+  const fingerprint = `${err.constraint || ''} ${err.detail || ''} ${err.message || ''}`.toLowerCase();
+  return (
+    fingerprint.includes('cafes_email_key') ||
+    fingerprint.includes('idx_cafes_email_active_unique') ||
+    fingerprint.includes('lower(email)')
+  );
+};
+const sendCafeWriteError = (res, err) => {
+  if (isCafeEmailConflict(err)) {
+    return res.status(409).json({
+      error: 'Another active cafe already uses this owner email. Use a different email or deactivate the other cafe first.'
+    });
+  }
+  return res.status(500).json({ error: err.message });
+};
 
 // ─── CAFES ────────────────────────────────────────────────────────────────────
 router.get('/cafes', async (req, res) => {
@@ -69,7 +86,7 @@ router.post('/cafes', async (req, res) => {
     `, [name, owner_name, email, city || 'Toronto', holiday_behaviour || 'Manual', kitchen_lead_email, prepSendTime]);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendCafeWriteError(res, err);
   }
 });
 
@@ -105,7 +122,7 @@ router.put('/cafes/:id', async (req, res) => {
     `, [name, owner_name, email, city, holiday_behaviour, kitchen_lead_email, active, prepSendTime, req.params.id]);
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendCafeWriteError(res, err);
   }
 });
 
@@ -160,7 +177,7 @@ router.patch('/cafes/:id', async (req, res) => {
 
     res.json(updated.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendCafeWriteError(res, err);
   }
 });
 

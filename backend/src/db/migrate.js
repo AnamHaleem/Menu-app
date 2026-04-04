@@ -29,6 +29,27 @@ const migrate = async () => {
       );
     `);
 
+    // Allow multiple cafes to share owner email (one operator managing many locations).
+    // Remove old unique constraints/indexes from earlier versions.
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'cafes_email_key'
+            AND conrelid = 'cafes'::regclass
+        ) THEN
+          ALTER TABLE cafes DROP CONSTRAINT cafes_email_key;
+        END IF;
+      END
+      $$;
+    `);
+
+    await client.query(`
+      DROP INDEX IF EXISTS idx_cafes_email_active_unique;
+    `);
+
     await client.query(`
       ALTER TABLE cafes
       ADD COLUMN IF NOT EXISTS prep_send_time VARCHAR(5) NOT NULL DEFAULT '06:00';

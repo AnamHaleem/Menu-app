@@ -13,14 +13,62 @@ const seed = async () => {
     client = await pool.connect();
     await client.query('BEGIN');
 
-    // Seed demo cafe
-    const cafeResult = await client.query(`
-      INSERT INTO cafes (name, owner_name, email, city, holiday_behaviour, kitchen_lead_email)
-      VALUES ('The Daily Grind', 'Demo Owner', 'owner@thedailygrind.ca', 'Toronto', 'Manual', 'kitchen@thedailygrind.ca')
-      ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
-      RETURNING id;
-    `);
-    const cafeId = cafeResult.rows[0].id;
+    // Seed demo cafe without relying on a global unique(email) constraint.
+    const demoCafe = {
+      name: 'The Daily Grind',
+      owner_name: 'Demo Owner',
+      email: 'owner@thedailygrind.ca',
+      city: 'Toronto',
+      holiday_behaviour: 'Manual',
+      kitchen_lead_email: 'kitchen@thedailygrind.ca'
+    };
+
+    const existingCafe = await client.query(
+      `SELECT id
+       FROM cafes
+       WHERE LOWER(email) = LOWER($1)
+         AND active = true
+       ORDER BY id
+       LIMIT 1`,
+      [demoCafe.email]
+    );
+
+    let cafeId;
+    if (existingCafe.rows.length) {
+      cafeId = existingCafe.rows[0].id;
+      await client.query(
+        `UPDATE cafes
+         SET name = $1,
+             owner_name = $2,
+             city = $3,
+             holiday_behaviour = $4,
+             kitchen_lead_email = $5
+         WHERE id = $6`,
+        [
+          demoCafe.name,
+          demoCafe.owner_name,
+          demoCafe.city,
+          demoCafe.holiday_behaviour,
+          demoCafe.kitchen_lead_email,
+          cafeId
+        ]
+      );
+    } else {
+      const insertedCafe = await client.query(
+        `INSERT INTO cafes (name, owner_name, email, city, holiday_behaviour, kitchen_lead_email)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id`,
+        [
+          demoCafe.name,
+          demoCafe.owner_name,
+          demoCafe.email,
+          demoCafe.city,
+          demoCafe.holiday_behaviour,
+          demoCafe.kitchen_lead_email
+        ]
+      );
+      cafeId = insertedCafe.rows[0].id;
+    }
 
     // Seed items
     const items = [

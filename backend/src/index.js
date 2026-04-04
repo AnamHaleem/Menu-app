@@ -64,7 +64,12 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`Menu API running on port ${PORT}`);
 
-  exec('npm run db:migrate && npm run db:seed', { cwd: __dirname + '/..' }, (err, stdout, stderr) => {
+  const autoSeedDemoData = String(process.env.AUTO_SEED_DEMO_DATA || '').trim().toLowerCase() === 'true';
+  const startupCommand = autoSeedDemoData ? 'npm run db:migrate && npm run db:seed' : 'npm run db:migrate';
+
+  console.log(`Auto demo seed on boot: ${autoSeedDemoData ? 'enabled' : 'disabled'}`);
+
+  exec(startupCommand, { cwd: __dirname + '/..' }, (err, stdout, stderr) => {
     if (stdout) console.log(stdout);
     if (stderr) console.error(stderr);
 
@@ -73,7 +78,11 @@ app.listen(PORT, () => {
       return;
     }
 
-    console.log('Migrations + seed complete');
+    if (autoSeedDemoData) {
+      console.log('Migrations + seed complete');
+    } else {
+      console.log('Migrations complete');
+    }
   });
 
   startScheduler();
