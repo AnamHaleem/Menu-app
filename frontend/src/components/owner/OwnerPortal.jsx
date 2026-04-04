@@ -176,12 +176,18 @@ export default function OwnerPortal() {
           {info && <p className="text-sm text-teal-700 mb-3">{info}</p>}
 
           <div className="flex flex-wrap gap-2">
-            <Button onClick={handleRequestCode} disabled={busy || !email.trim()}>
-              {busy ? 'Sending...' : (codeSent ? 'Resend code' : 'Send code')}
-            </Button>
-            {codeSent && (
-              <Button variant="secondary" onClick={handleVerifyCode} disabled={busy || code.length !== 6}>
-                {busy ? 'Verifying...' : 'Verify & sign in'}
+            {codeSent ? (
+              <>
+                <Button onClick={handleVerifyCode} disabled={busy || code.length !== 6}>
+                  {busy ? 'Verifying...' : 'Verify & sign in'}
+                </Button>
+                <Button variant="secondary" onClick={handleRequestCode} disabled={busy || !email.trim()}>
+                  {busy ? 'Sending...' : 'Resend code'}
+                </Button>
+              </>
+            ) : (
+              <Button onClick={handleRequestCode} disabled={busy || !email.trim()}>
+                {busy ? 'Sending...' : 'Send code'}
               </Button>
             )}
           </div>
@@ -265,4 +271,3 @@ export default function OwnerPortal() {
     </div>
   );
 }
-
