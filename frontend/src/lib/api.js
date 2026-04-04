@@ -125,9 +125,15 @@ export const ownerAuthApi = {
   getStoredToken: () => readOwnerToken(),
   setStoredToken: (token) => saveOwnerToken(token),
   clearStoredToken: () => saveOwnerToken(''),
-  requestCode: (email) => api.post('/owner-auth/request-code', { email }).then(r => r.data),
-  verifyCode: async (email, code) => {
-    const result = await api.post('/owner-auth/verify-code', { email, code }).then(r => r.data);
+  requestCode: (payload) => {
+    const body = typeof payload === 'string' ? { email: payload } : payload;
+    return api.post('/owner-auth/request-code', body).then(r => r.data);
+  },
+  verifyCode: async (payloadOrEmail, code, phoneCode = '') => {
+    const body = typeof payloadOrEmail === 'string'
+      ? { email: payloadOrEmail, email_code: code, phone_code: phoneCode }
+      : payloadOrEmail;
+    const result = await api.post('/owner-auth/verify-code', body).then(r => r.data);
     if (result?.token) {
       saveOwnerToken(result.token);
     }

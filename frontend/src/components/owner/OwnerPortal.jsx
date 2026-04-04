@@ -6,6 +6,36 @@ import { Button, Card, Spinner } from '../shared';
 import { ownerAuthApi, ownerPortalApi } from '../../lib/api';
 
 const OWNER_SELECTED_CAFE_KEY = 'menu.ownerSelectedCafeId';
+const CANADIAN_PROVINCES = [
+  { code: 'AB', name: 'Alberta' },
+  { code: 'BC', name: 'British Columbia' },
+  { code: 'MB', name: 'Manitoba' },
+  { code: 'NB', name: 'New Brunswick' },
+  { code: 'NL', name: 'Newfoundland and Labrador' },
+  { code: 'NS', name: 'Nova Scotia' },
+  { code: 'NT', name: 'Northwest Territories' },
+  { code: 'NU', name: 'Nunavut' },
+  { code: 'ON', name: 'Ontario' },
+  { code: 'PE', name: 'Prince Edward Island' },
+  { code: 'QC', name: 'Quebec' },
+  { code: 'SK', name: 'Saskatchewan' },
+  { code: 'YT', name: 'Yukon' }
+];
+
+function formatCanadianPhoneInput(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  const ten = (digits.startsWith('1') && digits.length > 10) ? digits.slice(1, 11) : digits.slice(0, 10);
+  if (!ten.length) return '';
+  if (ten.length <= 3) return `+1 ${ten}`;
+  if (ten.length <= 6) return `+1 ${ten.slice(0, 3)}-${ten.slice(3)}`;
+  return `+1 ${ten.slice(0, 3)}-${ten.slice(3, 6)}-${ten.slice(6)}`;
+}
+
+function normalizePostalInput(value) {
+  const raw = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+  if (raw.length <= 3) return raw;
+  return `${raw.slice(0, 3)} ${raw.slice(3)}`;
+}
 
 function readOwnerSelectedCafeId() {
   try {
@@ -32,8 +62,21 @@ function storeOwnerSelectedCafeId(cafeId) {
 export default function OwnerPortal() {
   const [loading, setLoading] = useState(true);
   const [owner, setOwner] = useState(null);
-  const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
+  const [signInForm, setSignInForm] = useState({
+    email: '',
+    first_name: '',
+    last_name: '',
+    phone: '',
+    secondary_phone: '',
+    city: '',
+    province: '',
+    street_address: '',
+    unit_number: '',
+    postal_code: ''
+  });
+  const [emailCode, setEmailCode] = useState('');
+  const [phoneCode, setPhoneCode] = useState('');
+  const [requiresPhoneCode, setRequiresPhoneCode] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -87,14 +130,56 @@ export default function OwnerPortal() {
     }
   }, [selectedCafe, selectedCafeId]);
 
+  const handleFormChange = (key, value) => {
+    let nextValue = value;
+    if (key === 'phone' || key === 'secondary_phone') {
+      nextValue = formatCanadianPhoneInput(value);
+    }
+    if (key === 'postal_code') {
+      nextValue = normalizePostalInput(value);
+    }
+    if (key === 'province') {
+      nextValue = String(value || '').toUpperCase();
+    }
+
+    setSignInForm((prev) => ({
+      ...prev,
+      [key]: nextValue
+    }));
+  };
+
+  const requiredFormFields = [
+    'email',
+    'first_name',
+    'last_name',
+    'phone',
+    'city',
+    'province',
+    'street_address',
+    'postal_code'
+  ];
+
   const handleRequestCode = async () => {
+    const missing = requiredFormFields.filter((key) => !String(signInForm[key] || '').trim());
+    if (missing.length) {
+      setError('Please complete all required fields before requesting sign-in codes.');
+      setInfo('');
+      return;
+    }
+
     setBusy(true);
     setError('');
     setInfo('');
     try {
-      await ownerAuthApi.requestCode(email.trim());
+      const result = await ownerAuthApi.requestCode(signInForm);
       setCodeSent(true);
-      setInfo('Verification code sent to your email.');
+      setRequiresPhoneCode(Boolean(result?.requiresPhoneCode));
+      setInfo(
+        result?.message ||
+        (result?.requiresPhoneCode
+          ? 'Verification code sent to your email and phone.'
+          : 'Verification code sent to your email.')
+      );
     } catch (err) {
       const apiMessage = err?.response?.data?.error;
       setError(apiMessage || 'Could not send code. Please try again.');
@@ -108,11 +193,17 @@ export default function OwnerPortal() {
     setError('');
     setInfo('');
     try {
-      const result = await ownerAuthApi.verifyCode(email.trim(), code.trim());
+      const result = await ownerAuthApi.verifyCode({
+        email: signInForm.email.trim(),
+        email_code: emailCode.trim(),
+        phone_code: requiresPhoneCode ? phoneCode.trim() : ''
+      });
       setOwner(result?.owner || null);
       setSelectedCafeId(result?.owner?.cafes?.[0]?.id || null);
-      setCode('');
+      setEmailCode('');
+      setPhoneCode('');
       setCodeSent(false);
+      setRequiresPhoneCode(false);
       setInfo('');
     } catch (err) {
       const apiMessage = err?.response?.data?.error;
@@ -125,8 +216,21 @@ export default function OwnerPortal() {
   const handleSignOut = () => {
     ownerAuthApi.clearStoredToken();
     setOwner(null);
-    setEmail('');
-    setCode('');
+    setSignInForm({
+      email: '',
+      first_name: '',
+      last_name: '',
+      phone: '',
+      secondary_phone: '',
+      city: '',
+      province: '',
+      street_address: '',
+      unit_number: '',
+      postal_code: ''
+    });
+    setEmailCode('');
+    setPhoneCode('');
+    setRequiresPhoneCode(false);
     setCodeSent(false);
     setSelectedCafeId(null);
     storeOwnerSelectedCafeId(null);
@@ -142,33 +246,135 @@ export default function OwnerPortal() {
 
   if (!owner) {
     return (
-      <div className="p-4 md:p-6 max-w-xl mx-auto">
+      <div className="p-4 md:p-6 max-w-2xl mx-auto">
         <Card className="p-7">
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Cafe owner sign-in</h2>
           <p className="text-sm text-gray-500 mb-5">
-            Enter your owner or kitchen lead email. We will send a 6-digit sign-in code.
+            Complete your profile and receive secure sign-in codes by email and SMS.
           </p>
 
-          <div className="mb-3">
-            <label className="block text-xs text-gray-400 mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@yourcafe.com"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
-            />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Owner first name *</label>
+              <input
+                value={signInForm.first_name}
+                onChange={(event) => handleFormChange('first_name', event.target.value)}
+                placeholder="Anam"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Owner last name *</label>
+              <input
+                value={signInForm.last_name}
+                onChange={(event) => handleFormChange('last_name', event.target.value)}
+                placeholder="Haleem"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs text-gray-400 mb-1">Email *</label>
+              <input
+                type="email"
+                value={signInForm.email}
+                onChange={(event) => handleFormChange('email', event.target.value)}
+                placeholder="you@yourcafe.com"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Primary phone *</label>
+              <input
+                value={signInForm.phone}
+                onChange={(event) => handleFormChange('phone', event.target.value)}
+                placeholder="+1 000-000-0000"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Secondary phone</label>
+              <input
+                value={signInForm.secondary_phone}
+                onChange={(event) => handleFormChange('secondary_phone', event.target.value)}
+                placeholder="+1 000-000-0000"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">City *</label>
+              <input
+                value={signInForm.city}
+                onChange={(event) => handleFormChange('city', event.target.value)}
+                placeholder="Toronto"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Province/Territory *</label>
+              <select
+                value={signInForm.province}
+                onChange={(event) => handleFormChange('province', event.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              >
+                <option value="">Select province</option>
+                {CANADIAN_PROVINCES.map((province) => (
+                  <option key={province.code} value={province.code}>
+                    {province.name} ({province.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Street address *</label>
+              <input
+                value={signInForm.street_address}
+                onChange={(event) => handleFormChange('street_address', event.target.value)}
+                placeholder="123 Queen St W"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Unit number</label>
+              <input
+                value={signInForm.unit_number}
+                onChange={(event) => handleFormChange('unit_number', event.target.value)}
+                placeholder="Unit 201"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Postal code *</label>
+              <input
+                value={signInForm.postal_code}
+                onChange={(event) => handleFormChange('postal_code', event.target.value)}
+                placeholder="M5V 2T6"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
           </div>
 
           {codeSent && (
-            <div className="mb-3">
-              <label className="block text-xs text-gray-400 mb-1">6-digit code</label>
-              <input
-                value={code}
-                onChange={(event) => setCode(event.target.value.replace(/[^\d]/g, '').slice(0, 6))}
-                placeholder="123456"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm tracking-[0.2em] focus:outline-none focus:border-navy-900"
-              />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Email code *</label>
+                <input
+                  value={emailCode}
+                  onChange={(event) => setEmailCode(event.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+                  placeholder="123456"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm tracking-[0.2em] focus:outline-none focus:border-navy-900"
+                />
+              </div>
+              {requiresPhoneCode && (
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">SMS code *</label>
+                  <input
+                    value={phoneCode}
+                    onChange={(event) => setPhoneCode(event.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+                    placeholder="654321"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm tracking-[0.2em] focus:outline-none focus:border-navy-900"
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -178,15 +384,18 @@ export default function OwnerPortal() {
           <div className="flex flex-wrap gap-2">
             {codeSent ? (
               <>
-                <Button onClick={handleVerifyCode} disabled={busy || code.length !== 6}>
+                <Button
+                  onClick={handleVerifyCode}
+                  disabled={busy || emailCode.length !== 6 || (requiresPhoneCode && phoneCode.length !== 6)}
+                >
                   {busy ? 'Verifying...' : 'Verify & sign in'}
                 </Button>
-                <Button variant="secondary" onClick={handleRequestCode} disabled={busy || !email.trim()}>
+                <Button variant="secondary" onClick={handleRequestCode} disabled={busy || !String(signInForm.email || '').trim()}>
                   {busy ? 'Sending...' : 'Resend code'}
                 </Button>
               </>
             ) : (
-              <Button onClick={handleRequestCode} disabled={busy || !email.trim()}>
+              <Button onClick={handleRequestCode} disabled={busy || !String(signInForm.email || '').trim()}>
                 {busy ? 'Sending...' : 'Send code'}
               </Button>
             )}

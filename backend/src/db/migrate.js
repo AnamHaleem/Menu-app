@@ -60,10 +60,56 @@ const migrate = async () => {
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) NOT NULL,
         full_name VARCHAR(255),
+        first_name VARCHAR(120),
+        last_name VARCHAR(120),
+        phone VARCHAR(32),
+        secondary_phone VARCHAR(32),
+        city VARCHAR(120),
+        province VARCHAR(64),
+        street_address VARCHAR(255),
+        unit_number VARCHAR(64),
+        postal_code VARCHAR(16),
         active BOOLEAN DEFAULT true,
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS first_name VARCHAR(120);
+    `);
+    await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS last_name VARCHAR(120);
+    `);
+    await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS phone VARCHAR(32);
+    `);
+    await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS secondary_phone VARCHAR(32);
+    `);
+    await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS city VARCHAR(120);
+    `);
+    await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS province VARCHAR(64);
+    `);
+    await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS street_address VARCHAR(255);
+    `);
+    await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS unit_number VARCHAR(64);
+    `);
+    await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS postal_code VARCHAR(16);
     `);
 
     await client.query(`

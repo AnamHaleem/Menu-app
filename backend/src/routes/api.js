@@ -6,6 +6,7 @@ const pool = require('../db/pool');
 const forecastService = require('../services/forecastService');
 const weatherService = require('../services/weatherService');
 const emailService = require('../services/emailService');
+const smsService = require('../services/smsService');
 const schedulerService = require('../services/schedulerService');
 
 const toKey = (value) => String(value || '').trim().toLowerCase();
@@ -69,21 +70,56 @@ const sendOwnerWriteError = (res, err) => {
   return res.status(500).json({ error: err.message });
 };
 
+const CANADA_PROVINCES = new Set([
+  'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'
+]);
+const REQUIRED_OWNER_PROFILE_FIELDS = [
+  'first_name',
+  'last_name',
+  'phone',
+  'city',
+  'province',
+  'street_address',
+  'postal_code'
+];
+
+const normalizeProvinceCode = (value) => String(value || '').trim().toUpperCase();
+const normalizeCanadianPostalCode = (value) => {
+  const raw = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (!raw) return null;
+  if (!/^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(raw)) return null;
+  return `${raw.slice(0, 3)} ${raw.slice(3)}`;
+};
+const normalizeCanadianPhone = (value) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return null;
+};
+const isSms2faRequired = () =>
+  ['1', 'true', 'yes'].includes(String(process.env.OWNER_REQUIRE_SMS_2FA || '').trim().toLowerCase());
+
 const OWNER_CODE_TTL_MINUTES = Math.max(3, parseInt(process.env.OWNER_CODE_TTL_MINUTES || '10', 10));
 const OWNER_SESSION_TTL_HOURS = Math.max(1, parseInt(process.env.OWNER_SESSION_TTL_HOURS || '168', 10));
-const ownerCodeStore = new Map(); // email -> { codeHash, expiresAt }
+const ownerCodeStore = new Map(); // email -> { emailCodeHash, smsCodeHash, expiresAt }
 
 const getOwnerAuthSecret = () =>
   String(process.env.OWNER_AUTH_SECRET || process.env.PREP_RUN_TOKEN || '').trim();
 
-const hashOwnerCode = (email, code, secret) => {
+const hashOwnerCode = (email, channel, code, secret) => {
   return crypto
     .createHash('sha256')
-    .update(`${normalizeEmail(email)}:${String(code || '').trim()}:${secret}`)
+    .update(`${normalizeEmail(email)}:${channel}:${String(code || '').trim()}:${secret}`)
     .digest('hex');
 };
 
 const createOwnerCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const isMatchingCodeHash = (expectedHash, submittedHash) => {
+  if (!expectedHash || !submittedHash) return false;
+  if (expectedHash.length !== submittedHash.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expectedHash), Buffer.from(submittedHash));
+};
 
 async function getLegacyOwnerCafesByEmail(email) {
   const normalizedEmail = normalizeEmail(email);
@@ -147,12 +183,125 @@ async function getOwnerAccessByEmail(email) {
 
 async function getOwnerById(ownerId) {
   const result = await pool.query(
-    `SELECT id, email, full_name, active, created_at, updated_at
+    `SELECT
+       id,
+       email,
+       full_name,
+       first_name,
+       last_name,
+       phone,
+       secondary_phone,
+       city,
+       province,
+       street_address,
+       unit_number,
+       postal_code,
+       active,
+       created_at,
+       updated_at
      FROM owner_users
      WHERE id = $1`,
     [ownerId]
   );
   return result.rows[0] || null;
+}
+
+async function getOwnerProfileByEmail(email) {
+  const result = await pool.query(
+    `SELECT
+       id,
+       email,
+       full_name,
+       first_name,
+       last_name,
+       phone,
+       secondary_phone,
+       city,
+       province,
+       street_address,
+       unit_number,
+       postal_code,
+       active
+     FROM owner_users
+     WHERE LOWER(email) = $1
+     LIMIT 1`,
+    [normalizeEmail(email)]
+  );
+  return result.rows[0] || null;
+}
+
+function sanitizeOwnerProfileInput(raw = {}) {
+  const trimOrNull = (value) => {
+    const cleaned = String(value || '').trim();
+    return cleaned ? cleaned : null;
+  };
+
+  return {
+    first_name: trimOrNull(raw.first_name),
+    last_name: trimOrNull(raw.last_name),
+    phone_raw: trimOrNull(raw.phone),
+    secondary_phone_raw: trimOrNull(raw.secondary_phone),
+    city: trimOrNull(raw.city),
+    province_raw: trimOrNull(raw.province),
+    street_address: trimOrNull(raw.street_address),
+    unit_number: trimOrNull(raw.unit_number),
+    postal_code_raw: trimOrNull(raw.postal_code)
+  };
+}
+
+function mergeOwnerProfile(existing = {}, incoming = {}) {
+  const provinceFromIncoming = incoming.province_raw ? normalizeProvinceCode(incoming.province_raw) : null;
+  const provinceFromExisting = existing.province ? normalizeProvinceCode(existing.province) : null;
+
+  const primaryPhone = incoming.phone_raw
+    ? normalizeCanadianPhone(incoming.phone_raw)
+    : (existing.phone || null);
+
+  const secondaryPhone = incoming.secondary_phone_raw
+    ? normalizeCanadianPhone(incoming.secondary_phone_raw)
+    : (existing.secondary_phone || null);
+
+  const postalCode = incoming.postal_code_raw
+    ? normalizeCanadianPostalCode(incoming.postal_code_raw)
+    : (existing.postal_code || null);
+
+  return {
+    first_name: incoming.first_name ?? existing.first_name ?? null,
+    last_name: incoming.last_name ?? existing.last_name ?? null,
+    phone: primaryPhone,
+    secondary_phone: secondaryPhone,
+    city: incoming.city ?? existing.city ?? null,
+    province: provinceFromIncoming || provinceFromExisting || null,
+    street_address: incoming.street_address ?? existing.street_address ?? null,
+    unit_number: incoming.unit_number ?? existing.unit_number ?? null,
+    postal_code: postalCode,
+    full_name: [incoming.first_name ?? existing.first_name ?? '', incoming.last_name ?? existing.last_name ?? '']
+      .join(' ')
+      .trim() || existing.full_name || null
+  };
+}
+
+function validateMergedOwnerProfile(profile) {
+  const missingFields = REQUIRED_OWNER_PROFILE_FIELDS.filter((field) => {
+    const value = profile[field];
+    return value === null || value === undefined || String(value).trim() === '';
+  });
+
+  const errors = [];
+  if (profile.province && !CANADA_PROVINCES.has(normalizeProvinceCode(profile.province))) {
+    errors.push('Province must be a valid Canadian province/territory code.');
+  }
+  if (profile.phone && !normalizeCanadianPhone(profile.phone)) {
+    errors.push('Primary phone must be in +1 000-000-0000 format.');
+  }
+  if (profile.secondary_phone && !normalizeCanadianPhone(profile.secondary_phone)) {
+    errors.push('Secondary phone must be in +1 000-000-0000 format.');
+  }
+  if (profile.postal_code && !normalizeCanadianPostalCode(profile.postal_code)) {
+    errors.push('Postal code must be a valid Canadian postal code.');
+  }
+
+  return { missingFields, errors };
 }
 
 async function listOwners({ cafeId = null, includeInactive = false } = {}) {
@@ -459,21 +608,125 @@ router.post('/owner-auth/request-code', async (req, res) => {
       return res.status(404).json({ error: 'No active cafe found for this email' });
     }
 
-    const code = createOwnerCode();
-    const codeHash = hashOwnerCode(email, code, secret);
-    ownerCodeStore.set(email, {
-      codeHash,
-      expiresAt: Date.now() + OWNER_CODE_TTL_MINUTES * 60 * 1000
-    });
+    const incomingProfile = sanitizeOwnerProfileInput(req.body || {});
+    const existingProfile = await getOwnerProfileByEmail(email);
+    const mergedProfile = mergeOwnerProfile(existingProfile || {}, incomingProfile);
+    const { missingFields, errors } = validateMergedOwnerProfile(mergedProfile);
+
+    if (missingFields.length) {
+      return res.status(400).json({
+        error: 'Please complete all required profile fields before signing in.',
+        missingFields
+      });
+    }
+    if (errors.length) {
+      return res.status(400).json({ error: errors[0] });
+    }
+
+    const requiresSms2fa = isSms2faRequired() || smsService.isConfigured();
+    if (requiresSms2fa && !mergedProfile.phone) {
+      return res.status(400).json({
+        error: 'A valid primary phone number is required for SMS verification.'
+      });
+    }
+
+    if (existingProfile?.id) {
+      await pool.query(
+        `UPDATE owner_users
+         SET full_name = $1,
+             first_name = $2,
+             last_name = $3,
+             phone = $4,
+             secondary_phone = $5,
+             city = $6,
+             province = $7,
+             street_address = $8,
+             unit_number = $9,
+             postal_code = $10,
+             active = true,
+             updated_at = NOW()
+         WHERE id = $11`,
+        [
+          mergedProfile.full_name,
+          mergedProfile.first_name,
+          mergedProfile.last_name,
+          mergedProfile.phone,
+          mergedProfile.secondary_phone,
+          mergedProfile.city,
+          mergedProfile.province,
+          mergedProfile.street_address,
+          mergedProfile.unit_number,
+          mergedProfile.postal_code,
+          existingProfile.id
+        ]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO owner_users (
+           email,
+           full_name,
+           first_name,
+           last_name,
+           phone,
+           secondary_phone,
+           city,
+           province,
+           street_address,
+           unit_number,
+           postal_code,
+           active
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true)`,
+        [
+          email,
+          mergedProfile.full_name,
+          mergedProfile.first_name,
+          mergedProfile.last_name,
+          mergedProfile.phone,
+          mergedProfile.secondary_phone,
+          mergedProfile.city,
+          mergedProfile.province,
+          mergedProfile.street_address,
+          mergedProfile.unit_number,
+          mergedProfile.postal_code
+        ]
+      );
+    }
+
+    const emailCode = createOwnerCode();
+    const emailCodeHash = hashOwnerCode(email, 'email', emailCode, secret);
+    let smsCodeHash = null;
 
     await emailService.sendOwnerLoginCode({
       email,
-      code,
+      code: emailCode,
       cafes,
       expiresMinutes: OWNER_CODE_TTL_MINUTES
     });
 
-    return res.json({ ok: true, message: 'Verification code sent' });
+    if (requiresSms2fa) {
+      const smsCode = createOwnerCode();
+      await smsService.sendOwnerLoginCode({
+        phone: mergedProfile.phone,
+        code: smsCode,
+        expiresMinutes: OWNER_CODE_TTL_MINUTES
+      });
+      smsCodeHash = hashOwnerCode(email, 'sms', smsCode, secret);
+    }
+
+    ownerCodeStore.set(email, {
+      emailCodeHash,
+      smsCodeHash,
+      expiresAt: Date.now() + OWNER_CODE_TTL_MINUTES * 60 * 1000
+    });
+
+    return res.json({
+      ok: true,
+      requiresPhoneCode: Boolean(smsCodeHash),
+      message: Boolean(smsCodeHash)
+        ? 'Verification code sent to your email and phone.'
+        : 'Verification code sent to your email.'
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -481,7 +734,8 @@ router.post('/owner-auth/request-code', async (req, res) => {
 
 router.post('/owner-auth/verify-code', async (req, res) => {
   const email = normalizeEmail(req.body?.email);
-  const code = String(req.body?.code || '').trim();
+  const emailCode = String(req.body?.email_code || req.body?.code || '').trim();
+  const phoneCode = String(req.body?.phone_code || '').trim();
   const secret = getOwnerAuthSecret();
 
   if (!secret) {
@@ -490,8 +744,8 @@ router.post('/owner-auth/verify-code', async (req, res) => {
     });
   }
 
-  if (!isValidEmail(email) || !/^\d{6}$/.test(code)) {
-    return res.status(400).json({ error: 'Email and 6-digit code are required' });
+  if (!isValidEmail(email) || !/^\d{6}$/.test(emailCode)) {
+    return res.status(400).json({ error: 'Email and 6-digit email code are required' });
   }
 
   try {
@@ -501,13 +755,20 @@ router.post('/owner-auth/verify-code', async (req, res) => {
       return res.status(401).json({ error: 'Code expired or invalid. Request a new one.' });
     }
 
-    const expectedHash = stored.codeHash;
-    const submittedHash = hashOwnerCode(email, code, secret);
-    const valid = expectedHash.length === submittedHash.length &&
-      crypto.timingSafeEqual(Buffer.from(expectedHash), Buffer.from(submittedHash));
+    const expectedEmailHash = stored.emailCodeHash;
+    const submittedEmailHash = hashOwnerCode(email, 'email', emailCode, secret);
+    if (!isMatchingCodeHash(expectedEmailHash, submittedEmailHash)) {
+      return res.status(401).json({ error: 'Incorrect email code' });
+    }
 
-    if (!valid) {
-      return res.status(401).json({ error: 'Incorrect code' });
+    if (stored.smsCodeHash) {
+      if (!/^\d{6}$/.test(phoneCode)) {
+        return res.status(400).json({ error: '6-digit phone code is required' });
+      }
+      const submittedSmsHash = hashOwnerCode(email, 'sms', phoneCode, secret);
+      if (!isMatchingCodeHash(stored.smsCodeHash, submittedSmsHash)) {
+        return res.status(401).json({ error: 'Incorrect phone code' });
+      }
     }
 
     ownerCodeStore.delete(email);
@@ -527,6 +788,7 @@ router.post('/owner-auth/verify-code', async (req, res) => {
       token,
       owner: {
         email,
+        profile: await getOwnerProfileByEmail(email),
         cafes
       }
     });
@@ -544,6 +806,7 @@ router.get('/owner-auth/me', requireOwnerAuth, async (req, res) => {
 
     return res.json({
       email: req.owner.email,
+      profile: await getOwnerProfileByEmail(req.owner.email),
       cafes
     });
   } catch (err) {
