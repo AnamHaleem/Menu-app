@@ -12,6 +12,10 @@ const WEATHER_MODIFIERS = {
   coldDrinks: ['Cold Brew'],
 };
 
+function normalizeItemKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
 function getWeatherModifier(itemName, condition, tempC) {
   const isHotDrink = WEATHER_MODIFIERS.hotDrinks.includes(itemName);
   const isColdDrink = WEATHER_MODIFIERS.coldDrinks.includes(itemName);
@@ -70,8 +74,8 @@ async function generateForecast(cafeId, targetDate) {
 
     const holidayModifier = isHoliday ? getHolidayModifier(holidayBehaviour) : 1.0;
 
-    // Get last 28 days of transactions per item
-    const transactionData = await client.query(`
+    // Get last 28 days of transactions per item (relative to target date first)
+    let transactionData = await client.query(`
       SELECT item_name, AVG(quantity) as avg_qty
       FROM transactions
       WHERE cafe_id = $1
@@ -80,13 +84,34 @@ async function generateForecast(cafeId, targetDate) {
       GROUP BY item_name
     `, [cafeId, targetDate]);
 
+    // Fallback: if target-date window has no rows, use latest available 28-day window in dataset
+    let usingFallbackWindow = false;
+    if (!transactionData.rows.length) {
+      transactionData = await client.query(`
+        WITH anchor AS (
+          SELECT MAX(date) AS max_date
+          FROM transactions
+          WHERE cafe_id = $1
+        )
+        SELECT t.item_name, AVG(t.quantity) AS avg_qty
+        FROM transactions t
+        CROSS JOIN anchor a
+        WHERE t.cafe_id = $1
+          AND a.max_date IS NOT NULL
+          AND t.date >= (a.max_date - INTERVAL '28 days')
+          AND t.date <= a.max_date
+        GROUP BY t.item_name
+      `, [cafeId]);
+      usingFallbackWindow = transactionData.rows.length > 0;
+    }
+
     const avgByItem = {};
     transactionData.rows.forEach(row => {
-      avgByItem[row.item_name] = parseFloat(row.avg_qty);
+      avgByItem[normalizeItemKey(row.item_name)] = parseFloat(row.avg_qty);
     });
 
     // Item trend signal: last 14 days vs previous 14 days
-    const trendData = await client.query(`
+    let trendData = await client.query(`
       SELECT
         item_name,
         AVG(CASE WHEN date >= ($2::date - INTERVAL '14 days') AND date < $2::date THEN quantity END) AS last_14_avg,
@@ -98,12 +123,33 @@ async function generateForecast(cafeId, targetDate) {
       GROUP BY item_name
     `, [cafeId, targetDate]);
 
+    if (!trendData.rows.length && usingFallbackWindow) {
+      trendData = await client.query(`
+        WITH anchor AS (
+          SELECT MAX(date) AS max_date
+          FROM transactions
+          WHERE cafe_id = $1
+        )
+        SELECT
+          t.item_name,
+          AVG(CASE WHEN t.date >= (a.max_date - INTERVAL '14 days') AND t.date <= a.max_date THEN t.quantity END) AS last_14_avg,
+          AVG(CASE WHEN t.date >= (a.max_date - INTERVAL '28 days') AND t.date < (a.max_date - INTERVAL '14 days') THEN t.quantity END) AS prev_14_avg
+        FROM transactions t
+        CROSS JOIN anchor a
+        WHERE t.cafe_id = $1
+          AND a.max_date IS NOT NULL
+          AND t.date >= (a.max_date - INTERVAL '28 days')
+          AND t.date <= a.max_date
+        GROUP BY t.item_name
+      `, [cafeId]);
+    }
+
     const itemTrends = {};
     trendData.rows.forEach(row => {
       const last14 = parseFloat(row.last_14_avg || 0);
       const prev14 = parseFloat(row.prev_14_avg || 0);
       const trendPct = prev14 > 0 ? ((last14 - prev14) / prev14) * 100 : 0;
-      itemTrends[row.item_name] = { last14, prev14, trendPct };
+      itemTrends[normalizeItemKey(row.item_name)] = { last14, prev14, trendPct };
     });
 
     // Get all active items for this cafe
@@ -115,7 +161,8 @@ async function generateForecast(cafeId, targetDate) {
     // Calculate predicted quantities per item
     const predictions = {};
     for (const item of itemsResult.rows) {
-      const avgQty = avgByItem[item.name] || 0;
+      const itemKey = normalizeItemKey(item.name);
+      const avgQty = avgByItem[itemKey] || 0;
       const weatherMod = getWeatherModifier(item.name, weather.condition, weather.temp);
       const predicted = Math.round(avgQty * dayMultiplier * weatherMod * holidayModifier);
       predictions[item.name] = {
@@ -198,6 +245,9 @@ async function generateForecast(cafeId, targetDate) {
         model: aiDecision.model || null,
         notes: aiDecision.notes || aiDecision.reason || '',
         globalMultiplier: aiDecision.globalMultiplier || 1
+      },
+      dataWindow: {
+        mode: usingFallbackWindow ? 'latest_available_28d' : 'target_relative_28d'
       },
       predictions,
       prepList: Object.values(ingredientTotals).sort((a, b) => a.station.localeCompare(b.station))
