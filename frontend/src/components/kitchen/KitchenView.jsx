@@ -104,6 +104,15 @@ export default function KitchenView({ cafeId, cafeName }) {
             <strong>Closed today</strong> — {forecast.holiday}. No prep required.
           </div>
         )}
+
+        {forecast?.learning && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-800 mt-3">
+            <strong>Auto-learning</strong>{' '}
+            {forecast.learning.enabled
+              ? `active — adjusted ${forecast.learning.itemsAdjusted || 0} item(s) using ${forecast.learning.itemsWithHistory || 0} item(s) with history.`
+              : 'not active yet. Run backend migrations to enable item-level tuning.'}
+          </div>
+        )}
       </div>
 
       {/* Progress bar */}

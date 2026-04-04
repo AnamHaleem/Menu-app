@@ -11,6 +11,7 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarEleme
 
 const fmt$ = (v) => '$' + Math.round(Number(v) || 0).toLocaleString();
 const fmtPct = (v) => Math.round(Number(v) || 0) + '%';
+const fmtMult = (v) => `${Number(v || 1).toFixed(2)}x`;
 
 export default function OwnerDashboard({ cafeId, cafeName }) {
   const [metrics, setMetrics] = useState(null);
@@ -104,6 +105,18 @@ export default function OwnerDashboard({ cafeId, cafeName }) {
     }
   };
 
+  const predictionEntries = Object.entries(forecast?.predictions || {});
+  const tunedItems = predictionEntries
+    .map(([name, details]) => ({
+      name,
+      multiplier: Number(details?.learningMultiplier || 1),
+      samples: Number(details?.learningSamples || 0),
+      predicted: Number(details?.predicted || 0)
+    }))
+    .filter((item) => item.samples > 0)
+    .sort((a, b) => Math.abs(b.multiplier - 1) - Math.abs(a.multiplier - 1))
+    .slice(0, 6);
+
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
 
@@ -185,6 +198,69 @@ export default function OwnerDashboard({ cafeId, cafeName }) {
             <MetricCard label="Waste reduction" value={fmtPct(metrics.wasteReductionPct)} sub="vs week 1 baseline" color="text-teal-600" />
             <MetricCard label="86 incidents this month" value={metrics.last30.incidents86} sub="last 30 days" color={metrics.last30.incidents86 === 0 ? 'text-teal-600' : 'text-red-500'} />
           </div>
+
+          {forecast?.learning && (
+            <Card className="p-5 mb-8">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Auto-learning loop</h3>
+                <Badge color={forecast.learning.enabled ? 'green' : 'amber'}>
+                  {forecast.learning.enabled ? 'Learning active' : 'Learning pending migration'}
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <MetricCard
+                  label="Items with history"
+                  value={forecast.learning.itemsWithHistory || 0}
+                  sub="with actual-vs-forecast samples"
+                />
+                <MetricCard
+                  label="Items adjusted"
+                  value={forecast.learning.itemsAdjusted || 0}
+                  sub="multiplier changed from 1.00"
+                  color="text-teal-600"
+                />
+                <MetricCard
+                  label="History window"
+                  value={`${forecast.learning.historyDays || 0}d`}
+                  sub="lookback period"
+                />
+                <MetricCard
+                  label="Confidence samples"
+                  value={forecast.learning.confidenceSamples || 0}
+                  sub="to trust full adjustment"
+                />
+              </div>
+
+              {tunedItems.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-50">
+                        {['Item', 'Learning multiplier', 'Samples', 'Predicted qty'].map(h => (
+                          <th key={h} className="text-left text-xs text-gray-400 font-medium px-3 py-2">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tunedItems.map(item => (
+                        <tr key={item.name} className="border-b border-gray-50">
+                          <td className="px-3 py-2 font-medium text-gray-900">{item.name}</td>
+                          <td className="px-3 py-2 text-gray-700">{fmtMult(item.multiplier)}</td>
+                          <td className="px-3 py-2 text-gray-600">{item.samples}</td>
+                          <td className="px-3 py-2 text-gray-700">{Math.round(item.predicted)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400">
+                  Learning is enabled but there are not enough historical matched samples yet for item-level tuning.
+                </p>
+              )}
+            </Card>
+          )}
         </>
       )}
 
