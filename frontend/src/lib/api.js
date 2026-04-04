@@ -23,6 +23,11 @@ export const cafesApi = {
   getOne: (id) => api.get(`/cafes/${id}`).then(r => r.data),
   create: (data) => api.post('/cafes', data).then(r => r.data),
   update: (id, data) => api.put(`/cafes/${id}`, data).then(r => r.data),
+  delete: (id, options = {}) => {
+    const params = options.hard ? { mode: 'hard' } : undefined;
+    const headers = options.token ? { 'x-admin-delete-token': options.token } : undefined;
+    return api.delete(`/cafes/${id}`, { params, headers }).then(r => r.data);
+  },
   setPrepTime: (id, prep_send_time) => api.patch(`/cafes/${id}/prep-time`, { prep_send_time }).then(r => r.data)
 };
 

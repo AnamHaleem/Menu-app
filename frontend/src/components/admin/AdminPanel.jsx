@@ -130,7 +130,7 @@ function AddCafeForm({ onSave, onCancel }) {
   );
 }
 
-function CafeDetail({ cafe }) {
+function CafeDetail({ cafe, onCafeDeleted }) {
   const [tab, setTab] = useState('menu');
   const [items, setItems] = useState([]);
   const [ingredients, setIngredients] = useState([]);
@@ -142,6 +142,8 @@ function CafeDetail({ cafe }) {
   const [prepSendTime, setPrepSendTime] = useState(cafe.prep_send_time || '06:00');
   const [savingPrepTime, setSavingPrepTime] = useState(false);
   const [prepTimeMessage, setPrepTimeMessage] = useState('');
+  const [deletingCafe, setDeletingCafe] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -189,6 +191,29 @@ function CafeDetail({ cafe }) {
       setPrepTimeMessage(apiError || 'Could not save prep email time.');
     } finally {
       setSavingPrepTime(false);
+    }
+  };
+
+  const handleDeleteCafe = async () => {
+    const confirmed = window.confirm(
+      `Delete "${cafe.name}"? This will deactivate the cafe and hide it from the current admin view.`
+    );
+    if (!confirmed) return;
+
+    setDeletingCafe(true);
+    setDeleteMessage('');
+
+    try {
+      await cafesApi.delete(cafe.id);
+      setDeleteMessage('Cafe deleted.');
+      if (typeof onCafeDeleted === 'function') {
+        await onCafeDeleted(cafe.id);
+      }
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setDeleteMessage(apiError || 'Could not delete cafe. Please try again.');
+    } finally {
+      setDeletingCafe(false);
     }
   };
 
@@ -386,6 +411,23 @@ function CafeDetail({ cafe }) {
               </p>
             )}
           </div>
+
+          <div className="mt-6 pt-6 border-t border-gray-100">
+            <p className="text-xs text-gray-400 mb-2">Danger zone</p>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={handleDeleteCafe}
+              disabled={deletingCafe}
+            >
+              {deletingCafe ? 'Deleting...' : 'Delete cafe'}
+            </Button>
+            {deleteMessage && (
+              <p className={`text-xs mt-2 ${deleteMessage.includes('deleted') ? 'text-teal-600' : 'text-red-600'}`}>
+                {deleteMessage}
+              </p>
+            )}
+          </div>
         </Card>
       )}
     </div>
@@ -404,6 +446,12 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
     if (cafe?.id) {
       try {
         window.localStorage.setItem(SELECTED_CAFE_STORAGE_KEY, String(cafe.id));
+      } catch {
+        // ignore localStorage failures
+      }
+    } else {
+      try {
+        window.localStorage.removeItem(SELECTED_CAFE_STORAGE_KEY);
       } catch {
         // ignore localStorage failures
       }
@@ -475,6 +523,20 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
     broadcastCafeSelection(cafe);
   };
 
+  const handleCafeDeleted = async (deletedCafeId) => {
+    const updated = await cafesApi.getAll();
+    const visibleCafes = updated.filter(cafe => cafe.id !== deletedCafeId);
+    setCafes(visibleCafes);
+
+    if (!visibleCafes.length) {
+      broadcastCafeSelection(null);
+      return;
+    }
+
+    const nextCafe = visibleCafes.find(cafe => cafe.active) || visibleCafes[0];
+    broadcastCafeSelection(nextCafe);
+  };
+
   if (loading) return <Spinner />;
 
   return (
@@ -515,7 +577,7 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
         {/* Cafe detail */}
         <div className="md:col-span-2">
           {selectedCafe
-            ? <CafeDetail cafe={selectedCafe} />
+            ? <CafeDetail cafe={selectedCafe} onCafeDeleted={handleCafeDeleted} />
             : <div className="text-center py-16 text-sm text-gray-400">Select a café to view details</div>
           }
         </div>
