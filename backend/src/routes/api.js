@@ -3323,6 +3323,7 @@ router.post('/cafes/:cafeId/catalog/sync', async (req, res) => {
           WHERE id = $5 AND cafe_id = $6
           RETURNING id, name
         `, [name, category, price, active, existing.id, cafeId]);
+        itemByKey.set(key, updated.rows[0]);
         itemIdByKey.set(key, updated.rows[0].id);
         itemsUpdated += 1;
       } else {
@@ -3331,6 +3332,7 @@ router.post('/cafes/:cafeId/catalog/sync', async (req, res) => {
           VALUES ($1, $2, $3, $4, $5)
           RETURNING id, name
         `, [cafeId, name, category, price, active]);
+        itemByKey.set(key, inserted.rows[0]);
         itemIdByKey.set(key, inserted.rows[0].id);
         itemsInserted += 1;
       }
@@ -3377,6 +3379,7 @@ router.post('/cafes/:cafeId/catalog/sync', async (req, res) => {
           WHERE id = $6 AND cafe_id = $7
           RETURNING id, name
         `, [name, unit, parLevel, shelfLifeDays, costPerUnit, existing.id, cafeId]);
+        ingredientByKey.set(key, updated.rows[0]);
         ingredientIdByKey.set(key, updated.rows[0].id);
         ingredientsUpdated += 1;
       } else {
@@ -3385,6 +3388,7 @@ router.post('/cafes/:cafeId/catalog/sync', async (req, res) => {
           VALUES ($1, $2, $3, $4, $5, $6)
           RETURNING id, name
         `, [cafeId, name, unit, parLevel, shelfLifeDays, costPerUnit]);
+        ingredientByKey.set(key, inserted.rows[0]);
         ingredientIdByKey.set(key, inserted.rows[0].id);
         ingredientsInserted += 1;
       }
@@ -3410,6 +3414,7 @@ router.post('/cafes/:cafeId/catalog/sync', async (req, res) => {
 
     let recipesInserted = 0;
     const skippedRecipes = [];
+    const seenRecipeKeys = new Set();
 
     for (const raw of recipes) {
       const itemName = String(raw?.item_name || raw?.item || '').trim();
@@ -3419,6 +3424,7 @@ router.post('/cafes/:cafeId/catalog/sync', async (req, res) => {
 
       const itemId = itemIdByKey.get(toKey(itemName));
       const ingredientId = ingredientIdByKey.get(toKey(ingredientName));
+      const recipeKey = `${itemId || 'missing'}:${ingredientId || 'missing'}:${toKey(station)}`;
 
       if (!itemName || !ingredientName || !itemId || !ingredientId || qty === null || qty <= 0) {
         skippedRecipes.push({
@@ -3429,6 +3435,18 @@ router.post('/cafes/:cafeId/catalog/sync', async (req, res) => {
         });
         continue;
       }
+
+      if (seenRecipeKeys.has(recipeKey)) {
+        skippedRecipes.push({
+          item_name: itemName,
+          ingredient_name: ingredientName,
+          qty_per_portion: qty,
+          reason: 'Duplicate recipe row in import payload'
+        });
+        continue;
+      }
+
+      seenRecipeKeys.add(recipeKey);
 
       await client.query(`
         INSERT INTO recipes (cafe_id, item_id, ingredient_id, qty_per_portion, station)
