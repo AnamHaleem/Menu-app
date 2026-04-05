@@ -222,7 +222,24 @@ export const adminHqApi = {
   runSupportAction: (cafeId, payload) =>
     api.post(`/admin/cafes/${cafeId}/support-actions`, payload).then((r) => r.data),
   updateModelControls: (cafeId, payload) =>
-    api.patch(`/admin/cafes/${cafeId}/model-controls`, payload).then((r) => r.data)
+    api.patch(`/admin/cafes/${cafeId}/model-controls`, payload).then((r) => r.data),
+  getMlShadowSummary: (options = {}) => {
+    const params = buildQueryParams(options) || {};
+    if (options.cafeId) params.cafeId = options.cafeId;
+    if (options.modelVersionId) params.modelVersionId = options.modelVersionId;
+    if (options.modelKey) params.modelKey = options.modelKey;
+    return api.get('/admin/ml/shadow/summary', { params }).then((r) => r.data);
+  },
+  getMlShadowComparison: (options = {}) => {
+    const params = buildQueryParams(options) || {};
+    if (options.cafeId) params.cafeId = options.cafeId;
+    if (options.modelVersionId) params.modelVersionId = options.modelVersionId;
+    if (options.modelKey) params.modelKey = options.modelKey;
+    if (options.limit) params.limit = options.limit;
+    return api.get('/admin/ml/shadow/comparison', { params }).then((r) => r.data);
+  },
+  upsertMlModelVersion: (payload) => api.post('/admin/ml/model-versions', payload).then((r) => r.data),
+  importMlShadowPredictions: (payload) => api.post('/admin/ml/shadow/predictions/import', payload).then((r) => r.data)
 };
 
 export default api;

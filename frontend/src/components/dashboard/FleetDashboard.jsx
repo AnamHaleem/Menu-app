@@ -26,6 +26,16 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 const fmtMoney = (value) => `$${Math.round(Number(value) || 0).toLocaleString()}`;
 const fmtPct = (value) => `${Math.round(Number(value) || 0)}%`;
+const fmtSignedPct = (value) => {
+  const numeric = Number(value) || 0;
+  return `${numeric > 0 ? '+' : ''}${Math.round(numeric)}%`;
+};
+const fmtDateTime = (value) => {
+  if (!value) return 'Not imported yet';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Not imported yet';
+  return date.toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+};
 
 function alertBadgeColor(severity) {
   if (severity === 'critical' || severity === 'high') return 'red';
@@ -234,6 +244,27 @@ export default function FleetDashboard({ selectedCafe, onSelectCafe }) {
   };
 
   const selectedCafeDetail = dashboard?.selectedCafe || null;
+  const shadowCenter = dashboard?.modelCenter?.shadow || {
+    summary: {
+      modelsCount: 0,
+      shadowModelsCount: 0,
+      comparedRows: 0,
+      mlAvgAbsErrorPct: 0,
+      ruleAvgAbsErrorPct: 0,
+      liftPct: 0,
+      avgConfidenceScore: 0,
+      improvedCafes: 0,
+      worseCafes: 0,
+      latestImportedAt: null,
+      bestModelVersionId: null,
+      bestModelKey: null,
+      bestModelDisplayName: null
+    },
+    models: [],
+    cafes: [],
+    bestModel: null,
+    recentRuns: []
+  };
 
   const handleSelectCafe = (row) => {
     onSelectCafe?.(row.cafe);
@@ -579,6 +610,97 @@ export default function FleetDashboard({ selectedCafe, onSelectCafe }) {
                 </div>
               </div>
             ))}
+          </div>
+
+          <div className="mt-5 rounded-[24px] border border-blue-100 bg-blue-50/70 p-4">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-700">Shadow model performance</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  Compare candidate model predictions against the live rules engine without changing production forecasts.
+                </p>
+              </div>
+              <Badge color={shadowCenter.summary.liftPct > 0 ? 'green' : shadowCenter.summary.modelsCount ? 'amber' : 'gray'}>
+                {shadowCenter.summary.modelsCount ? `${fmtSignedPct(shadowCenter.summary.liftPct)} vs rules` : 'No shadow model imported'}
+              </Badge>
+            </div>
+
+            {shadowCenter.summary.modelsCount ? (
+              <>
+                <div className="mt-4 grid grid-cols-2 xl:grid-cols-4 gap-3">
+                  <div className="rounded-2xl border border-white/70 bg-white px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Best shadow model</p>
+                    <p className="mt-2 text-sm font-bold text-slate-950">{shadowCenter.summary.bestModelDisplayName || shadowCenter.summary.bestModelKey}</p>
+                    <p className="mt-1 text-xs text-slate-500">{shadowCenter.summary.comparedRows} compared rows</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/70 bg-white px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Shadow error</p>
+                    <p className="mt-2 text-[28px] leading-none font-bold text-slate-950">{fmtPct(shadowCenter.summary.mlAvgAbsErrorPct)}</p>
+                    <p className="mt-1 text-xs text-slate-500">Confidence {fmtPct(shadowCenter.summary.avgConfidenceScore * 100)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/70 bg-white px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Rules error</p>
+                    <p className="mt-2 text-[28px] leading-none font-bold text-slate-950">{fmtPct(shadowCenter.summary.ruleAvgAbsErrorPct)}</p>
+                    <p className="mt-1 text-xs text-slate-500">Improved cafés: {shadowCenter.summary.improvedCafes}</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/70 bg-white px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Latest import</p>
+                    <p className="mt-2 text-sm font-bold text-slate-950">{fmtDateTime(shadowCenter.summary.latestImportedAt)}</p>
+                    <p className="mt-1 text-xs text-slate-500">{shadowCenter.summary.shadowModelsCount} shadow-ready model(s)</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <div className="rounded-2xl border border-white/70 bg-white p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Model comparison</p>
+                    <div className="mt-3 space-y-3">
+                      {shadowCenter.models.slice(0, 4).map((row) => (
+                        <div key={row.modelVersionId} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">{row.displayName}</p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                {row.comparedRows} rows · {row.cafesCovered} cafés · {fmtPct(row.avgConfidenceScore * 100)} confidence
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-semibold text-slate-900">{fmtPct(row.mlAvgAbsErrorPct)}</p>
+                              <p className={`mt-1 text-xs font-semibold ${row.liftPct > 0 ? 'text-emerald-600' : 'text-amber-600'}`}>{fmtSignedPct(row.liftPct)} vs rules</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/70 bg-white p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Cafés improved by the best model</p>
+                    <div className="mt-3 space-y-3">
+                      {shadowCenter.cafes.slice(0, 4).map((row) => (
+                        <div key={row.cafeId} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">{row.cafeName}</p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                ML {fmtPct(row.mlAvgAbsErrorPct)} · rules {fmtPct(row.ruleAvgAbsErrorPct)} · {row.comparedRows} matched rows
+                              </p>
+                            </div>
+                            <Badge color={row.liftPct > 0 ? 'green' : row.liftPct < 0 ? 'amber' : 'gray'}>{fmtSignedPct(row.liftPct)}</Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="mt-4 rounded-2xl border border-dashed border-blue-200 bg-white px-4 py-5">
+                <p className="text-sm font-semibold text-slate-900">No shadow models imported yet</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Once your training script produces candidate predictions, import them through the admin ML shadow endpoint and we’ll compare them against live rule-based forecasts here.
+                </p>
+              </div>
+            )}
           </div>
         </Card>
       </div>

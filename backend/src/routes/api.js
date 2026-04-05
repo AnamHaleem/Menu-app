@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
 const forecastService = require('../services/forecastService');
 const mlFeatureService = require('../services/mlFeatureService');
+const mlShadowService = require('../services/mlShadowService');
 const weatherService = require('../services/weatherService');
 const emailService = require('../services/emailService');
 const smsService = require('../services/smsService');
@@ -1475,7 +1476,28 @@ async function buildAdminHqSnapshot(options = {}) {
           avgAbsErrorPct: 0,
           driftCafes: 0
         },
-        cafes: []
+        cafes: [],
+        shadow: {
+          summary: {
+            modelsCount: 0,
+            shadowModelsCount: 0,
+            comparedRows: 0,
+            mlAvgAbsErrorPct: 0,
+            ruleAvgAbsErrorPct: 0,
+            liftPct: 0,
+            avgConfidenceScore: 0,
+            improvedCafes: 0,
+            worseCafes: 0,
+            latestImportedAt: null,
+            bestModelVersionId: null,
+            bestModelKey: null,
+            bestModelDisplayName: null
+          },
+          models: [],
+          cafes: [],
+          bestModel: null,
+          recentRuns: []
+        }
       },
       selectedCafe: null,
       auditTrail: []
@@ -1496,6 +1518,7 @@ async function buildAdminHqSnapshot(options = {}) {
     unmappedTransactions,
     learningCoverage,
     forecastPerformance,
+    shadowSummary,
     auditRows
   ] = await Promise.all([
     Promise.all(
@@ -1602,6 +1625,10 @@ async function buildAdminHqSnapshot(options = {}) {
        GROUP BY cafe_id`,
       [range.startDate, range.endDate, cafeIds]
     ),
+    mlShadowService.getShadowSummary({
+      startDate: range.startDate,
+      endDate: range.endDate
+    }),
     pool.query(
       `SELECT *
        FROM admin_audit_events
@@ -1746,7 +1773,8 @@ async function buildAdminHqSnapshot(options = {}) {
     },
     cafes: [...cafeHealth]
       .sort((a, b) => (b.avgAbsErrorPct || 0) - (a.avgAbsErrorPct || 0))
-      .slice(0, 8)
+      .slice(0, 8),
+    shadow: shadowSummary
   };
 
   const resolvedSelectedCafe =
@@ -1894,6 +1922,86 @@ router.get('/admin/ml/feature-store/export.csv', async (req, res) => {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="ml-feature-store.csv"');
     res.send(csv);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+
+router.post('/admin/ml/model-versions', async (req, res) => {
+  try {
+    const actorEmail = getAdminActorEmail(req);
+    const modelVersion = await mlShadowService.upsertModelVersion(req.body || {});
+
+    await writeAdminAuditEvent({
+      eventType: 'ml.model_version.upsert',
+      severity: 'medium',
+      cafeId: null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `Shadow model saved: ${modelVersion.display_name}`,
+      details: {
+        modelVersionId: modelVersion.id,
+        modelKey: modelVersion.model_key,
+        status: modelVersion.status
+      }
+    });
+
+    res.status(201).json({ modelVersion });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ml/shadow/predictions/import', async (req, res) => {
+  try {
+    const actorEmail = getAdminActorEmail(req);
+    const result = await mlShadowService.importShadowPredictions({
+      ...(req.body || {}),
+      requestedBy: actorEmail || 'admin',
+      source: req.body?.source || 'admin_portal'
+    });
+
+    await writeAdminAuditEvent({
+      eventType: 'ml.shadow_predictions.import',
+      severity: 'medium',
+      cafeId: req.body?.cafeId ? Number(req.body.cafeId) : null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `Imported ${result.predictionsWritten} shadow predictions for ${result.modelVersion.display_name}`,
+      details: result
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/ml/shadow/summary', async (req, res) => {
+  try {
+    const summary = await mlShadowService.getShadowSummary({
+      cafeId: req.query.cafeId,
+      modelVersionId: req.query.modelVersionId,
+      modelKey: req.query.modelKey,
+      ...resolveDateRangeOptions(req.query)
+    });
+    res.json(summary);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/ml/shadow/comparison', async (req, res) => {
+  try {
+    const comparison = await mlShadowService.listShadowComparisonRows({
+      cafeId: req.query.cafeId,
+      modelVersionId: req.query.modelVersionId,
+      modelKey: req.query.modelKey,
+      limit: req.query.limit,
+      ...resolveDateRangeOptions(req.query)
+    });
+    res.json(comparison);
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }
