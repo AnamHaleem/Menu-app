@@ -76,6 +76,7 @@ export default function OwnerPortal() {
   const [loading, setLoading] = useState(true);
   const [owner, setOwner] = useState(null);
   const [theme, setTheme] = useState(getPreferredTheme);
+  const [isCompactHeader, setIsCompactHeader] = useState(false);
   const [signInForm, setSignInForm] = useState({
     email: '',
     first_name: '',
@@ -102,6 +103,19 @@ export default function OwnerPortal() {
   useEffect(() => {
     persistTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsCompactHeader(window.scrollY > 24);
+    };
+
+    handleScroll();
+    window.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -518,25 +532,42 @@ export default function OwnerPortal() {
 
   return (
     <div className="app-page">
-      <Card tone="dark" className="menu-hero-card mb-6 p-6 md:p-7">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+      <div className="sticky top-0 z-40 mb-6 pb-3">
+        <Card
+          tone="dark"
+          className={[
+            'menu-hero-card transition-all duration-300',
+            isCompactHeader ? 'p-4 md:p-5' : 'p-6 md:p-7'
+          ].join(' ')}
+        >
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <span className="inline-flex items-center rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/70">
               Owner workspace
             </span>
-            <h1 className="mt-5 font-display text-4xl font-semibold tracking-tight text-white">{selectedCafe.name}</h1>
+            <h1
+              className={[
+                'font-display font-semibold tracking-tight text-white transition-all duration-300',
+                isCompactHeader ? 'mt-4 text-3xl' : 'mt-5 text-4xl'
+              ].join(' ')}
+            >
+              {selectedCafe.name}
+            </h1>
             <p className="mt-2 text-sm leading-6 text-white/70">
               Signed in as {owner.email} &middot; {cafes.length} linked cafe{cafes.length === 1 ? '' : 's'}
             </p>
           </div>
 
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:flex-nowrap">
             <div className="flex items-center gap-3">
               <label className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">Cafe</label>
               <select
                 value={selectedCafe.id}
                 onChange={(event) => setSelectedCafeId(parseInt(event.target.value, 10))}
-                className="min-w-[15rem] rounded-full border border-white/10 bg-white/10 px-4 py-3 text-sm text-white"
+                className={[
+                  'min-w-[15rem] rounded-full border border-white/10 bg-white/10 text-sm text-white transition-all duration-300',
+                  isCompactHeader ? 'px-4 py-2.5' : 'px-4 py-3'
+                ].join(' ')}
               >
                 {cafes.map((cafe) => (
                   <option key={cafe.id} value={cafe.id}>
@@ -546,11 +577,20 @@ export default function OwnerPortal() {
               </select>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 rounded-[1.3rem] border border-white/10 bg-white/10 p-1.5">
+            <div
+              className={[
+                'flex flex-nowrap items-center gap-1 overflow-x-auto rounded-[1.1rem] border border-white/10 bg-white/10 whitespace-nowrap transition-all duration-300',
+                isCompactHeader ? 'p-1' : 'p-1.5'
+              ].join(' ')}
+            >
               <NavLink
                 to="dashboard"
                 className={({ isActive }) =>
-                  `rounded-full px-4 py-2 text-sm font-semibold transition duration-200 ${isActive ? 'bg-white text-ink-950 shadow-sm' : 'text-white/70 hover:bg-white/10 hover:text-white'}`
+                  [
+                    'rounded-full font-semibold transition duration-200 whitespace-nowrap',
+                    isCompactHeader ? 'px-3 py-1.5 text-[0.82rem]' : 'px-4 py-2 text-sm',
+                    isActive ? 'bg-white text-ink-950 shadow-sm' : 'text-white/70 hover:bg-white/10 hover:text-white'
+                  ].join(' ')
                 }
               >
                 Dashboard
@@ -558,14 +598,18 @@ export default function OwnerPortal() {
               <NavLink
                 to="kitchen"
                 className={({ isActive }) =>
-                  `rounded-full px-4 py-2 text-sm font-semibold transition duration-200 ${isActive ? 'bg-white text-ink-950 shadow-sm' : 'text-white/70 hover:bg-white/10 hover:text-white'}`
+                  [
+                    'rounded-full font-semibold transition duration-200 whitespace-nowrap',
+                    isCompactHeader ? 'px-3 py-1.5 text-[0.82rem]' : 'px-4 py-2 text-sm',
+                    isActive ? 'bg-white text-ink-950 shadow-sm' : 'text-white/70 hover:bg-white/10 hover:text-white'
+                  ].join(' ')
                 }
               >
                 Kitchen
               </NavLink>
             </div>
 
-            <ThemeToggle theme={theme} onThemeChange={setTheme} />
+            <ThemeToggle theme={theme} onThemeChange={setTheme} size="sm" className="shrink-0" />
 
             <Button
               size="sm"
@@ -577,7 +621,8 @@ export default function OwnerPortal() {
             </Button>
           </div>
         </div>
-      </Card>
+        </Card>
+      </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Badge color="green">Owner access active</Badge>

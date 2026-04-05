@@ -501,6 +501,11 @@ td {
     box-shadow 0.3s ease;
 }
 
+.theme-toggle--sm {
+  gap: 0.2rem;
+  padding: 0.18rem;
+}
+
 .theme-toggle-button {
   border: 0;
   background: transparent;
@@ -516,6 +521,12 @@ td {
     background-color 0.2s ease,
     color 0.2s ease,
     box-shadow 0.2s ease;
+}
+
+.theme-toggle-button--sm {
+  padding: 0.5rem 0.85rem;
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
 }
 
 .theme-toggle-button:hover {

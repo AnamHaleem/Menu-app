@@ -31,47 +31,91 @@ function storeCafeId(cafeId) {
 }
 
 function Nav({ cafe, authEnabled, theme, onThemeChange }) {
+  const [isCompact, setIsCompact] = useState(false);
   const links = [
     { to: '/dashboard', label: 'Dashboard' },
     { to: '/kitchen', label: 'Kitchen' },
     { to: '/admin', label: 'Admin' }
   ];
 
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsCompact(window.scrollY > 24);
+    };
+
+    handleScroll();
+    window.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
+
   return (
-    <header className="sticky top-0 z-50 px-3 pt-3 md:px-5">
-      <nav className="mx-auto max-w-7xl rounded-[32px] border border-white/80 bg-white/70 px-4 py-4 shadow-soft backdrop-blur-xl">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center">
+    <header
+      className={[
+        'sticky top-0 z-50 px-3 transition-all duration-300 md:px-5',
+        isCompact ? 'pt-1.5 md:pt-2' : 'pt-3 md:pt-4'
+      ].join(' ')}
+    >
+      <nav
+        className={[
+          'mx-auto max-w-7xl border border-white/80 bg-white/70 backdrop-blur-xl transition-all duration-300',
+          isCompact ? 'rounded-[24px] px-4 py-3 shadow-float' : 'rounded-[32px] px-4 py-4 shadow-soft md:px-5'
+        ].join(' ')}
+      >
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between xl:gap-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center xl:flex-nowrap">
             <div className="flex items-center gap-3">
-              <div className="menu-floating-accent flex h-12 w-12 items-center justify-center rounded-[1.4rem] bg-gradient-to-br from-navy-900 via-navy-700 to-teal-600 text-lg font-display font-bold text-white shadow-glow">
+              <div
+                className={[
+                  'menu-floating-accent flex items-center justify-center rounded-[1.25rem] bg-gradient-to-br from-navy-900 via-navy-700 to-teal-600 font-display font-bold text-white shadow-glow transition-all duration-300',
+                  isCompact ? 'h-10 w-10 text-base' : 'h-12 w-12 text-lg'
+                ].join(' ')}
+              >
                 M
               </div>
               <div>
-                <p className="font-display text-xl font-semibold leading-none text-ink-950">Menu</p>
-                <p className="mt-1 text-sm text-ink-500">Cafe operations intelligence</p>
+                <p className={['font-display font-semibold leading-none text-ink-950 transition-all duration-300', isCompact ? 'text-lg' : 'text-xl'].join(' ')}>
+                  Menu
+                </p>
+                <p className={['mt-1 text-ink-500 transition-all duration-300', isCompact ? 'text-xs' : 'text-sm'].join(' ')}>
+                  Cafe operations intelligence
+                </p>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
               {cafe && (
-                <div className="inline-flex items-center gap-3 rounded-full border border-white/80 bg-white/70 px-4 py-2 shadow-sm">
+                <div
+                  className={[
+                    'inline-flex items-center gap-3 rounded-full border border-white/80 bg-white/70 shadow-sm whitespace-nowrap transition-all duration-300',
+                    isCompact ? 'px-3 py-1.5' : 'px-4 py-2'
+                  ].join(' ')}
+                >
                   <span className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-ink-500">Active cafe</span>
                   <span className="font-semibold text-ink-900">{cafe.name}</span>
                 </div>
               )}
-              {!authEnabled && <Badge color="amber">Guest Mode</Badge>}
+              {!authEnabled && <Badge color="amber" className={isCompact ? 'px-3 py-1' : ''}>Guest Mode</Badge>}
             </div>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between xl:justify-end">
-            <div className="flex flex-wrap items-center gap-2 rounded-[1.3rem] border border-white/80 bg-slate-50/70 p-1.5 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center xl:ml-auto xl:flex-nowrap">
+            <div
+              className={[
+                'flex flex-nowrap items-center gap-1 overflow-x-auto rounded-[1.15rem] border border-white/80 bg-slate-50/70 shadow-sm whitespace-nowrap transition-all duration-300',
+                isCompact ? 'p-1' : 'p-1.5'
+              ].join(' ')}
+            >
               {links.map((link) => (
                 <NavLink
                   key={link.to}
                   to={link.to}
                   className={({ isActive }) =>
                     [
-                      'rounded-full px-4 py-2 text-sm font-semibold transition duration-200',
+                      'rounded-full font-semibold transition duration-200 whitespace-nowrap',
+                      isCompact ? 'px-3 py-1.5 text-[0.82rem]' : 'px-4 py-2 text-sm',
                       isActive
                         ? 'bg-ink-950 text-white shadow-lg shadow-slate-900/15'
                         : 'text-ink-500 hover:bg-white hover:text-ink-900'
@@ -83,14 +127,19 @@ function Nav({ cafe, authEnabled, theme, onThemeChange }) {
               ))}
             </div>
 
-            <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
+            <ThemeToggle theme={theme} onThemeChange={onThemeChange} size="sm" className="shrink-0" />
 
             {authEnabled ? (
-              <div className="inline-flex items-center justify-center rounded-full border border-white/80 bg-white/75 p-1.5 shadow-sm">
+              <div className="inline-flex shrink-0 items-center justify-center rounded-full border border-white/80 bg-white/75 p-1.5 shadow-sm">
                 <UserButton afterSignOutUrl="/" />
               </div>
             ) : (
-              <div className="inline-flex items-center rounded-full border border-white/80 bg-white/75 px-4 py-2 text-xs font-medium text-ink-500 shadow-sm">
+              <div
+                className={[
+                  'inline-flex shrink-0 items-center rounded-full border border-white/80 bg-white/75 font-medium text-ink-500 shadow-sm transition-all duration-300',
+                  isCompact ? 'px-3 py-1.5 text-[0.7rem]' : 'px-4 py-2 text-xs'
+                ].join(' ')}
+              >
                 No auth configured
               </div>
             )}

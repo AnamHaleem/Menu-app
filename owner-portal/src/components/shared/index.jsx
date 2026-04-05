@@ -161,21 +161,21 @@ export function Card({ children, className = '', tone = 'default' }) {
   );
 }
 
-export function ThemeToggle({ theme = 'light', onThemeChange, className = '' }) {
+export function ThemeToggle({ theme = 'light', onThemeChange, size = 'md', className = '' }) {
   const options = [
     { value: 'light', label: 'Light' },
     { value: 'dark', label: 'Dark' }
   ];
 
   return (
-    <div className={cx('theme-toggle', className)} role="group" aria-label="Color theme">
+    <div className={cx('theme-toggle', size === 'sm' && 'theme-toggle--sm', className)} role="group" aria-label="Color theme">
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
           onClick={() => onThemeChange?.(option.value)}
           aria-pressed={theme === option.value}
-          className={cx('theme-toggle-button', theme === option.value && 'is-active')}
+          className={cx('theme-toggle-button', size === 'sm' && 'theme-toggle-button--sm', theme === option.value && 'is-active')}
         >
           {option.label}
         </button>
