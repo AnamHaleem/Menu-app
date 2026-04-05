@@ -178,14 +178,18 @@ export function SectionHeader({ title, action }) {
 }
 
 export function Button({ children, onClick, variant = 'primary', size = 'md', disabled = false, className = '' }) {
-  const base = 'inline-flex items-center justify-center rounded-2xl font-semibold transition-all duration-200 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed';
+  const base = 'inline-flex items-center justify-center rounded-2xl font-semibold leading-none whitespace-nowrap shrink-0 transition-all duration-200 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed';
   const variants = {
     primary: 'bg-blue-600 text-white shadow-[0_10px_24px_rgba(37,99,235,0.18)] hover:bg-blue-700 hover:-translate-y-px',
     secondary: 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:-translate-y-px',
     danger: 'bg-red-500 text-white hover:bg-red-600 hover:-translate-y-px',
     ghost: 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
   };
-  const sizes = { sm: 'px-3.5 py-2 text-xs', md: 'px-4.5 py-2.5 text-sm', lg: 'px-6 py-3 text-base' };
+  const sizes = {
+    sm: 'min-h-9 px-4 py-2 text-xs',
+    md: 'min-h-11 px-[18px] py-2.5 text-sm',
+    lg: 'min-h-12 px-6 py-3 text-base'
+  };
   return (
     <button
       onClick={onClick}
