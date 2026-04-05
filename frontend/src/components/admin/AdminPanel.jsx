@@ -849,6 +849,7 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
   const [selectedCafe, setSelectedCafe] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAddCafe, setShowAddCafe] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
   const broadcastCafeSelection = (cafe) => {
     setSelectedCafe(cafe || null);
@@ -875,33 +876,54 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
   };
 
   useEffect(() => {
-    cafesApi.getAll().then(data => {
-      setCafes(data);
+    let cancelled = false;
 
-      if (!data.length) {
-        broadcastCafeSelection(null);
-        return;
-      }
+    cafesApi.getAll()
+      .then(data => {
+        if (cancelled) return;
 
-      let defaultCafe = data[0];
+        setLoadError('');
+        setCafes(data);
 
-      if (currentCafeId) {
-        const currentCafe = data.find(cafe => cafe.id === currentCafeId);
-        if (currentCafe) defaultCafe = currentCafe;
-      }
-
-      try {
-        const storedCafeId = parseInt(window.localStorage.getItem(SELECTED_CAFE_STORAGE_KEY), 10);
-        if (!Number.isNaN(storedCafeId)) {
-          const storedCafe = data.find(cafe => cafe.id === storedCafeId);
-          if (storedCafe) defaultCafe = storedCafe;
+        if (!data.length) {
+          broadcastCafeSelection(null);
+          return;
         }
-      } catch {
-        // ignore localStorage read failures
-      }
 
-      broadcastCafeSelection(defaultCafe);
-    }).finally(() => setLoading(false));
+        let defaultCafe = data[0];
+
+        if (currentCafeId) {
+          const currentCafe = data.find(cafe => cafe.id === currentCafeId);
+          if (currentCafe) defaultCafe = currentCafe;
+        }
+
+        try {
+          const storedCafeId = parseInt(window.localStorage.getItem(SELECTED_CAFE_STORAGE_KEY), 10);
+          if (!Number.isNaN(storedCafeId)) {
+            const storedCafe = data.find(cafe => cafe.id === storedCafeId);
+            if (storedCafe) defaultCafe = storedCafe;
+          }
+        } catch {
+          // ignore localStorage read failures
+        }
+
+        broadcastCafeSelection(defaultCafe);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+
+        const apiError = err?.response?.data?.error;
+        setLoadError(apiError || 'Could not load cafes right now.');
+        setCafes([]);
+        broadcastCafeSelection(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleCafeAdded = async (createdCafe) => {
@@ -964,6 +986,13 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
         </div>
         <Button size="sm" onClick={() => setShowAddCafe(!showAddCafe)}>+ Add café</Button>
       </div>
+
+      {loadError && (
+        <Card className="mb-6 border border-red-200 bg-red-50/90 p-4">
+          <p className="text-sm font-semibold text-red-700">We couldn&apos;t load the cafe roster.</p>
+          <p className="mt-1 text-sm text-red-600">{loadError}</p>
+        </Card>
+      )}
 
       {showAddCafe && (
         <AddCafeForm onSave={handleCafeAdded} onCancel={() => setShowAddCafe(false)} />

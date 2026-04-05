@@ -47,7 +47,23 @@ app.use(cors({
 app.use(express.json());
 
 if (process.env.CLERK_SECRET_KEY) {
-  app.use(clerkMiddleware());
+  console.log('CLERK_SECRET_KEY detected. Using non-blocking Clerk middleware.');
+  const clerk = clerkMiddleware();
+
+  app.use((req, res, next) => {
+    try {
+      clerk(req, res, (err) => {
+        if (err) {
+          console.error('Clerk middleware error:', err.stack || err.message || err);
+          return next();
+        }
+        return next();
+      });
+    } catch (err) {
+      console.error('Clerk middleware error:', err.stack || err.message || err);
+      return next();
+    }
+  });
 } else {
   console.warn('CLERK_SECRET_KEY not set. Clerk middleware is disabled.');
 }
