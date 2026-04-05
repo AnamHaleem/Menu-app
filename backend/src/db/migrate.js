@@ -56,6 +56,45 @@ const migrate = async () => {
     `);
 
     await client.query(`
+      ALTER TABLE cafes
+      ADD COLUMN IF NOT EXISTS learning_enabled BOOLEAN NOT NULL DEFAULT true;
+    `);
+
+    await client.query(`
+      ALTER TABLE cafes
+      ADD COLUMN IF NOT EXISTS ai_decision_enabled BOOLEAN NOT NULL DEFAULT true;
+    `);
+
+    await client.query(`
+      ALTER TABLE cafes
+      ADD COLUMN IF NOT EXISTS weather_sensitivity DECIMAL(5,2) NOT NULL DEFAULT 1.00;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_audit_events (
+        id SERIAL PRIMARY KEY,
+        event_type VARCHAR(80) NOT NULL,
+        severity VARCHAR(16) NOT NULL DEFAULT 'info',
+        cafe_id INTEGER REFERENCES cafes(id) ON DELETE SET NULL,
+        actor_email VARCHAR(255),
+        actor_source VARCHAR(80) NOT NULL DEFAULT 'system',
+        summary TEXT NOT NULL,
+        details JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_events_created_at
+      ON admin_audit_events (created_at DESC);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_events_cafe_id
+      ON admin_audit_events (cafe_id);
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS owner_users (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) NOT NULL,

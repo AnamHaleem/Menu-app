@@ -265,12 +265,14 @@ async function generateForecast(cafeId, targetDate, options = {}) {
     if (!cafe.rows.length) throw new Error('Cafe not found');
     const cafeData = cafe.rows[0];
 
-    let learningEnabled = true;
+    let learningEnabled = cafeData.learning_enabled !== false;
     let learningByItemId = new Map();
     try {
       await syncForecastActualsFromTransactions(client, cafeId, targetDate);
-      await rebuildItemLearningState(client, cafeId, targetDate);
-      learningByItemId = await getLearningStateByItemId(client, cafeId);
+      if (learningEnabled) {
+        await rebuildItemLearningState(client, cafeId, targetDate);
+        learningByItemId = await getLearningStateByItemId(client, cafeId);
+      }
     } catch (err) {
       if (err?.code === '42P01') {
         learningEnabled = false;
@@ -400,7 +402,13 @@ async function generateForecast(cafeId, targetDate, options = {}) {
     for (const item of itemsResult.rows) {
       const itemKey = normalizeItemKey(item.name);
       const avgQty = avgByItem[itemKey] || 0;
-      const weatherMod = getWeatherModifier(item.name, weather.condition, weather.temp);
+      const baseWeatherMod = getWeatherModifier(item.name, weather.condition, weather.temp);
+      const weatherSensitivity = clampNumber(Number(cafeData.weather_sensitivity || 1), 0.5, 1.5);
+      const weatherMod = clampNumber(
+        1 + ((baseWeatherMod - 1) * weatherSensitivity),
+        0.75,
+        1.4
+      );
       const learningState = learningByItemId.get(item.id);
       const learningMultiplier = clampNumber(
         Number(learningState?.multiplier || 1),
@@ -426,16 +434,21 @@ async function generateForecast(cafeId, targetDate, options = {}) {
       };
     }
 
-    const aiDecision = await aiDecisionService.getForecastAdjustments({
-      cafe: cafeData,
-      targetDate,
-      dayName,
-      weather,
-      isHoliday,
-      holidayName: isHoliday ? holidayCheck.rows[0].holiday_name : null,
-      baselinePredictions: predictions,
-      itemTrends
-    });
+    const aiDecision = cafeData.ai_decision_enabled === false
+      ? {
+          applied: false,
+          reason: 'Cafe AI decisions are disabled'
+        }
+      : await aiDecisionService.getForecastAdjustments({
+          cafe: cafeData,
+          targetDate,
+          dayName,
+          weather,
+          isHoliday,
+          holidayName: isHoliday ? holidayCheck.rows[0].holiday_name : null,
+          baselinePredictions: predictions,
+          itemTrends
+        });
 
     if (aiDecision.applied) {
       for (const itemName of Object.keys(predictions)) {
@@ -536,6 +549,7 @@ async function generateForecast(cafeId, targetDate, options = {}) {
         confidenceSamples: LEARNING_CONFIDENCE_SAMPLES,
         ratioMin: LEARNING_RATIO_MIN,
         ratioMax: LEARNING_RATIO_MAX,
+        weatherSensitivity: Math.round((Number(cafeData.weather_sensitivity || 1)) * 100) / 100,
         itemsWithHistory,
         itemsAdjusted
       },

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { SignIn, SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
-import OwnerDashboard from './components/dashboard/OwnerDashboard';
+import FleetDashboard from './components/dashboard/FleetDashboard';
 import KitchenView from './components/kitchen/KitchenView';
 import AdminPanel from './components/admin/AdminPanel';
 import { cafesApi, metricsApi } from './lib/api';
@@ -117,9 +117,9 @@ function ShellNavLink({ to, label, icon: Icon, collapsed }) {
 
 function AdminSidebar({ cafe, authEnabled, collapsed, onToggle }) {
   const navItems = [
-    { to: '/dashboard', label: 'Dashboard', icon: DashboardIcon },
-    { to: '/kitchen', label: "Today's Prep", icon: PrepIcon },
-    { to: '/admin', label: 'Admin Cafe', icon: AdminIcon }
+    { to: '/dashboard', label: 'Fleet HQ', icon: DashboardIcon },
+    { to: '/kitchen', label: 'Cafe Ops', icon: PrepIcon },
+    { to: '/admin', label: 'Cafe Setup', icon: AdminIcon }
   ];
 
   return (
@@ -181,25 +181,25 @@ function AdminSidebar({ cafe, authEnabled, collapsed, onToggle }) {
 
 function pageMetaForPath(pathname) {
   if (pathname.includes('/kitchen')) {
-    return {
-      eyebrow: 'Operations',
-      title: "Today's Prep",
-      subtitle: 'Live checklist, actual prep capture, and execution analytics.'
+      return {
+        eyebrow: 'Operations',
+      title: 'Cafe Operations',
+      subtitle: 'Jump into a selected cafe’s prep execution, actuals, and today’s kitchen view.'
     };
   }
 
   if (pathname.includes('/admin')) {
     return {
       eyebrow: 'Management',
-      title: 'Admin Cafe',
+      title: 'Cafe Setup',
       subtitle: 'Manage cafes, owners, recipes, and operational settings.'
     };
   }
 
   return {
     eyebrow: 'Overview',
-    title: 'Dashboard',
-    subtitle: 'Track savings, waste reduction, forecast performance, and daily trends.'
+    title: 'Fleet HQ',
+    subtitle: 'Monitor savings, health, ML performance, and support actions across every cafe.'
   };
 }
 
@@ -279,17 +279,17 @@ function AppShell({ cafe, authEnabled, onCafeChange }) {
           <ShellHeader cafe={cafe} authEnabled={authEnabled} />
           <main className="min-w-0">
             <Routes>
-              <Route path="/" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route
                 path="/dashboard"
-                element={cafe ? <OwnerDashboard cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
+                element={<FleetDashboard selectedCafe={cafe} onSelectCafe={onCafeChange} />}
               />
               <Route
                 path="/kitchen"
                 element={cafe ? <KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
               />
               <Route path="/admin" element={<AdminPanel onCafeChange={onCafeChange} currentCafeId={cafe?.id} />} />
-              <Route path="*" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </main>
         </div>

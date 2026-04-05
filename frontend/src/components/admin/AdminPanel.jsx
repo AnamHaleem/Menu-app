@@ -995,7 +995,7 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Admin</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">Cafe setup</h1>
           <p className="text-sm text-gray-400 mt-0.5">{cafes.length} café{cafes.length !== 1 ? 's' : ''} on Menu</p>
         </div>
         <Button size="sm" onClick={() => setShowAddCafe(!showAddCafe)}>+ Add café</Button>

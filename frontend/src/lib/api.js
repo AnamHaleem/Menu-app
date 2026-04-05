@@ -213,4 +213,16 @@ export const adminOwnersApi = {
   sendInvite: (ownerId) => api.post(`/admin/owners/${ownerId}/send-invite`).then(r => r.data)
 };
 
+export const adminHqApi = {
+  get: (options = {}) => {
+    const params = buildQueryParams(options) || {};
+    if (options.selectedCafeId) params.selectedCafeId = options.selectedCafeId;
+    return api.get('/admin/hq', { params }).then((r) => r.data);
+  },
+  runSupportAction: (cafeId, payload) =>
+    api.post(`/admin/cafes/${cafeId}/support-actions`, payload).then((r) => r.data),
+  updateModelControls: (cafeId, payload) =>
+    api.patch(`/admin/cafes/${cafeId}/model-controls`, payload).then((r) => r.data)
+};
+
 export default api;

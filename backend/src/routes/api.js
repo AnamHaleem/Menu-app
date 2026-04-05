@@ -1032,6 +1032,909 @@ async function buildPrepAnalytics(cafeId, options = {}) {
   };
 }
 
+function ensureAnalyticsDateRange(options = {}, fallbackDays = 30) {
+  const safeEnd = normalizeIsoDate(options.endDate) || isoDateFromDate(new Date());
+  const safeStart = normalizeIsoDate(options.startDate) || shiftIsoDate(safeEnd, -(Math.max(1, fallbackDays) - 1));
+  return {
+    startDate: safeStart,
+    endDate: safeEnd,
+    label: formatRangeDateLabel(safeStart) && formatRangeDateLabel(safeEnd)
+      ? `${formatRangeDateLabel(safeStart)} – ${formatRangeDateLabel(safeEnd)}`
+      : (formatRangeDateLabel(safeStart) || formatRangeDateLabel(safeEnd) || 'Selected range')
+  };
+}
+
+function mapRowsByCafeId(rows = [], key = 'cafe_id') {
+  const map = new Map();
+  for (const row of rows) {
+    map.set(Number(row[key]), row);
+  }
+  return map;
+}
+
+function averageNumbers(values = []) {
+  const clean = values
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+
+  if (!clean.length) return 0;
+  return clean.reduce((sum, value) => sum + value, 0) / clean.length;
+}
+
+function diffDaysFromToday(value) {
+  const normalized = normalizeIsoDate(value);
+  if (!normalized) return null;
+  const today = new Date(`${isoDateFromDate(new Date())}T12:00:00`);
+  const target = new Date(`${normalized}T12:00:00`);
+  if (Number.isNaN(today.getTime()) || Number.isNaN(target.getTime())) return null;
+  return Math.floor((today.getTime() - target.getTime()) / 86400000);
+}
+
+function severityRank(severity = 'info') {
+  return { critical: 0, high: 1, medium: 2, info: 3 }[severity] ?? 9;
+}
+
+function normalizeAuditRow(row) {
+  let details = row.details;
+  if (typeof details === 'string') {
+    try {
+      details = JSON.parse(details);
+    } catch {
+      details = {};
+    }
+  }
+
+  return {
+    id: row.id,
+    eventType: row.event_type,
+    severity: row.severity,
+    cafeId: row.cafe_id,
+    actorEmail: row.actor_email || null,
+    actorSource: row.actor_source,
+    summary: row.summary,
+    details: details && typeof details === 'object' ? details : {},
+    createdAt: row.created_at
+  };
+}
+
+async function writeAdminAuditEvent({
+  eventType,
+  severity = 'info',
+  cafeId = null,
+  actorEmail = null,
+  actorSource = 'system',
+  summary,
+  details = {}
+}) {
+  if (!eventType || !summary) return;
+
+  try {
+    await pool.query(
+      `INSERT INTO admin_audit_events (
+         event_type,
+         severity,
+         cafe_id,
+         actor_email,
+         actor_source,
+         summary,
+         details
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      [
+        eventType,
+        severity,
+        cafeId,
+        actorEmail,
+        actorSource,
+        summary,
+        JSON.stringify(details || {})
+      ]
+    );
+  } catch (err) {
+    console.error('Failed to write admin audit event:', err.message || err);
+  }
+}
+
+function getAdminActorEmail(req) {
+  const headerEmail = normalizeEmail(req.headers['x-admin-actor-email']);
+  if (isValidEmail(headerEmail)) return headerEmail;
+
+  const candidates = [
+    req.auth?.sessionClaims?.email,
+    req.auth?.sessionClaims?.email_address,
+    req.auth?.claims?.email_address,
+    req.auth?.user?.primaryEmailAddress?.emailAddress
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeEmail(candidate);
+    if (isValidEmail(normalized)) return normalized;
+  }
+
+  return null;
+}
+
+function buildCafeAlerts(healthRow) {
+  const alerts = [];
+
+  if (!healthRow.ownerAccessCount) {
+    alerts.push({
+      severity: 'critical',
+      title: 'No owner access assigned',
+      description: 'This cafe has no active owner/team members assigned in the owner portal.'
+    });
+  }
+
+  if (healthRow.daysSinceTransaction === null || healthRow.daysSinceTransaction > 3) {
+    alerts.push({
+      severity: 'high',
+      title: 'Sales data is stale',
+      description: 'Recent transactions are missing or delayed, which can distort tomorrow’s prep forecast.'
+    });
+  }
+
+  if (healthRow.daysSinceDailyLog === null || healthRow.daysSinceDailyLog > 2) {
+    alerts.push({
+      severity: 'medium',
+      title: 'End-of-day actuals are missing',
+      description: 'Daily logs have not been updated recently, so savings and waste metrics are running blind.'
+    });
+  }
+
+  if (healthRow.recipeCoveragePct < 80 && healthRow.activeItems > 0) {
+    alerts.push({
+      severity: 'high',
+      title: 'Recipe coverage is incomplete',
+      description: `${healthRow.activeItems - healthRow.itemsWithRecipes} active menu item(s) do not have recipe mappings.`
+    });
+  }
+
+  if (healthRow.unmappedTransactions > 0) {
+    alerts.push({
+      severity: 'medium',
+      title: 'Unmapped sales rows detected',
+      description: `${healthRow.unmappedTransactions} transaction row(s) could not be matched to menu items in the selected range.`
+    });
+  }
+
+  if (healthRow.ingredientsMissingUnit > 0 || healthRow.duplicateItemGroups > 0) {
+    alerts.push({
+      severity: 'medium',
+      title: 'Data quality cleanup needed',
+      description: `${healthRow.ingredientsMissingUnit} ingredient unit gaps and ${healthRow.duplicateItemGroups} duplicate active item name group(s).`
+    });
+  }
+
+  if (healthRow.avgAbsErrorPct !== null && healthRow.avgAbsErrorPct > 25) {
+    alerts.push({
+      severity: 'high',
+      title: 'Forecast drift is rising',
+      description: `Average absolute forecast error is ${Math.round(healthRow.avgAbsErrorPct)}% in the selected range.`
+    });
+  }
+
+  if (healthRow.actualCaptureRate < 35 && healthRow.prepRowsInRange > 0) {
+    alerts.push({
+      severity: 'medium',
+      title: 'Actual prep capture is low',
+      description: `Only ${Math.round(healthRow.actualCaptureRate)}% of prep rows have actual prep recorded.`
+    });
+  }
+
+  if (healthRow.learningCoveragePct < 40 && healthRow.activeItems > 0 && healthRow.learningEnabled) {
+    alerts.push({
+      severity: 'info',
+      title: 'Learning coverage is still thin',
+      description: 'This cafe is still building enough item-level history for stronger auto-learning adjustments.'
+    });
+  }
+
+  return alerts.sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
+}
+
+function summarizeCafeHealth(cafe, metrics, supplemental = {}) {
+  const recipeCoveragePct = supplemental.activeItems
+    ? Math.round((supplemental.itemsWithRecipes / supplemental.activeItems) * 100)
+    : 0;
+  const learningCoveragePct = supplemental.activeItems
+    ? Math.round((supplemental.learningItems / supplemental.activeItems) * 100)
+    : 0;
+  const completionRate = supplemental.prepRowsInRange
+    ? Math.round((supplemental.prepCompletedInRange / supplemental.prepRowsInRange) * 100)
+    : 0;
+  const actualCaptureRate = supplemental.prepRowsInRange
+    ? Math.round((supplemental.prepActualsInRange / supplemental.prepRowsInRange) * 100)
+    : 0;
+  const reportingRate = supplemental.rangeDayCount
+    ? Math.round((supplemental.logCountInRange / supplemental.rangeDayCount) * 100)
+    : 0;
+
+  const syncStatus = supplemental.daysSinceTransaction === null
+    ? 'No POS data'
+    : supplemental.daysSinceTransaction <= 1
+      ? 'Live'
+      : supplemental.daysSinceTransaction <= 3
+        ? 'Lagging'
+        : 'Stale';
+  const loggingStatus = supplemental.daysSinceDailyLog === null
+    ? 'No actuals'
+    : supplemental.daysSinceDailyLog <= 1
+      ? 'Current'
+      : supplemental.daysSinceDailyLog <= 3
+        ? 'Behind'
+        : 'Missing';
+  const prepStatus = supplemental.prepItemsToday > 0 ? 'Generated today' : 'Missing today';
+  const forecastStatus = supplemental.avgAbsErrorPct === null
+    ? 'Warming up'
+    : supplemental.avgAbsErrorPct <= 15
+      ? 'Stable'
+      : supplemental.avgAbsErrorPct <= 25
+        ? 'Watch'
+        : 'Drift';
+  const learningStatus = !cafe.learning_enabled
+    ? 'Paused'
+    : learningCoveragePct >= 70
+      ? 'Strong'
+      : learningCoveragePct >= 35
+        ? 'Growing'
+        : 'Thin';
+
+  const healthRow = {
+    cafeId: cafe.id,
+    cafeName: cafe.name,
+    city: cafe.city,
+    ownerName: cafe.owner_name || null,
+    cafe,
+    metrics,
+    totalSavings: Math.round(Number(metrics?.allTime?.totalSavings || 0)),
+    wasteSaved: Math.round(Number(metrics?.allTime?.wasteSaved || 0)),
+    labourSaved: Math.round(Number(metrics?.allTime?.labourSaved$ || 0)),
+    forecastAccuracy: Math.round(Number(metrics?.forecastAccuracy || 0)),
+    wasteReductionPct: Math.round(Number(metrics?.wasteReductionPct || 0)),
+    recorded86: Number(metrics?.allTime?.total86 || 0),
+    daysRunning: Number(metrics?.daysRunning || 0),
+    ownerAccessCount: supplemental.ownerAccessCount,
+    activeItems: supplemental.activeItems,
+    itemsWithRecipes: supplemental.itemsWithRecipes,
+    recipeCoveragePct,
+    ingredientsMissingUnit: supplemental.ingredientsMissingUnit,
+    duplicateItemGroups: supplemental.duplicateItemGroups,
+    unmappedTransactions: supplemental.unmappedTransactions,
+    learningEnabled: cafe.learning_enabled !== false,
+    aiDecisionEnabled: cafe.ai_decision_enabled !== false,
+    weatherSensitivity: Math.round(Number(cafe.weather_sensitivity || 1) * 100) / 100,
+    learningCoveragePct,
+    learningItems: supplemental.learningItems,
+    avgAbsErrorPct: supplemental.avgAbsErrorPct === null ? null : Math.round(Number(supplemental.avgAbsErrorPct)),
+    actualForecastSamples: supplemental.actualForecastSamples,
+    aiAppliedCount: supplemental.aiAppliedCount,
+    prepRowsInRange: supplemental.prepRowsInRange,
+    completionRate,
+    actualCaptureRate,
+    reportingRate,
+    logCountInRange: supplemental.logCountInRange,
+    prepItemsToday: supplemental.prepItemsToday,
+    lastTransactionDate: supplemental.lastTransactionDate,
+    lastDailyLogDate: supplemental.lastDailyLogDate,
+    lastPrepDate: supplemental.lastPrepDate,
+    daysSinceTransaction: supplemental.daysSinceTransaction,
+    daysSinceDailyLog: supplemental.daysSinceDailyLog,
+    daysSincePrep: supplemental.daysSincePrep,
+    syncStatus,
+    loggingStatus,
+    prepStatus,
+    forecastStatus,
+    learningStatus
+  };
+
+  const alerts = buildCafeAlerts(healthRow);
+  const riskScore = alerts.reduce((score, alert) => {
+    if (alert.severity === 'critical') return score + 40;
+    if (alert.severity === 'high') return score + 25;
+    if (alert.severity === 'medium') return score + 12;
+    return score + 4;
+  }, 0) + Math.min(20, Math.round(Number(healthRow.avgAbsErrorPct || 0) / 4));
+
+  return {
+    ...healthRow,
+    issueCount: alerts.length,
+    riskScore,
+    riskLevel: riskScore >= 70 ? 'High' : riskScore >= 35 ? 'Medium' : 'Low',
+    alerts
+  };
+}
+
+async function getOwnerContactsForCafe(cafeId) {
+  const result = await pool.query(
+    `SELECT
+       o.id,
+       o.email,
+       COALESCE(NULLIF(o.full_name, ''), CONCAT_WS(' ', NULLIF(o.first_name, ''), NULLIF(o.last_name, ''))) AS full_name,
+       o.active,
+       oca.access_role
+     FROM owner_cafe_access oca
+     JOIN owner_users o ON o.id = oca.owner_id
+     WHERE oca.cafe_id = $1
+     ORDER BY CASE oca.access_role
+       WHEN 'owner' THEN 0
+       WHEN 'admin' THEN 1
+       WHEN 'editor' THEN 2
+       ELSE 3
+     END, LOWER(o.email)`,
+    [cafeId]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    email: row.email,
+    fullName: row.full_name || row.email,
+    active: Boolean(row.active),
+    accessRole: normalizeOwnerAccessRole(row.access_role)
+  }));
+}
+
+async function buildAdminHqSnapshot(options = {}) {
+  const selectedCafeId = Number(options.selectedCafeId) || null;
+  const range = ensureAnalyticsDateRange(options, 30);
+  const rangeDayCount = Math.max(
+    1,
+    Math.floor(
+      (
+        new Date(`${range.endDate}T12:00:00`).getTime() -
+        new Date(`${range.startDate}T12:00:00`).getTime()
+      ) / 86400000
+    ) + 1
+  );
+
+  const cafesResult = await pool.query(
+    `SELECT
+       c.*,
+       COALESCE(oca.owner_access_count, 0)::int AS owner_access_count
+     FROM cafes c
+     LEFT JOIN (
+       SELECT cafe_id, COUNT(*)::int AS owner_access_count
+       FROM owner_cafe_access
+       GROUP BY cafe_id
+     ) oca ON oca.cafe_id = c.id
+     WHERE c.active = true
+     ORDER BY c.name ASC`
+  );
+
+  const cafes = cafesResult.rows;
+  if (!cafes.length) {
+    return {
+      range,
+      overview: {
+        activeCafes: 0,
+        cafesReporting: 0,
+        totalSavings: 0,
+        wasteSaved: 0,
+        labourSaved: 0,
+        recorded86: 0,
+        avgForecastAccuracy: 0,
+        avgActualCaptureRate: 0,
+        prepReadyToday: 0,
+        criticalAlerts: 0
+      },
+      chartSeries: { savingsByCafe: [] },
+      cafeHealth: [],
+      alerts: [],
+      benchmarking: {
+        topSavings: [],
+        topAccuracy: [],
+        strongestAdoption: [],
+        highestRisk: []
+      },
+      dataQuality: {
+        summary: {
+          duplicateItemGroups: 0,
+          ingredientsMissingUnit: 0,
+          unmappedTransactions: 0,
+          lowRecipeCoverageCafes: 0
+        },
+        cafes: []
+      },
+      modelCenter: {
+        config: {
+          aiEnabled: ['1', 'true', 'yes'].includes(String(process.env.ENABLE_AI_DECISIONS || 'true').trim().toLowerCase()),
+          model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+          learningHistoryDays: Number(process.env.LEARNING_HISTORY_DAYS || 60),
+          confidenceSamples: Number(process.env.LEARNING_CONFIDENCE_SAMPLES || 8)
+        },
+        summary: {
+          cafesLearningDisabled: 0,
+          avgLearningCoveragePct: 0,
+          avgAbsErrorPct: 0,
+          driftCafes: 0
+        },
+        cafes: []
+      },
+      selectedCafe: null,
+      auditTrail: []
+    };
+  }
+
+  const cafeIds = cafes.map((cafe) => cafe.id);
+  const today = isoDateFromDate(new Date());
+
+  const [
+    metricsEntries,
+    transactionFreshness,
+    logFreshness,
+    prepFreshness,
+    recipeCoverage,
+    ingredientUnitGaps,
+    duplicateItems,
+    unmappedTransactions,
+    learningCoverage,
+    forecastPerformance,
+    auditRows
+  ] = await Promise.all([
+    Promise.all(
+      cafes.map(async (cafe) => [cafe.id, await buildMetrics(cafe.id, range)])
+    ),
+    pool.query(
+      `SELECT
+         cafe_id,
+         MAX(date)::date AS last_transaction_date,
+         COUNT(*) FILTER (WHERE date >= $1::date AND date <= $2::date)::int AS tx_count_in_range
+       FROM transactions
+       WHERE cafe_id = ANY($3::int[])
+       GROUP BY cafe_id`,
+      [range.startDate, range.endDate, cafeIds]
+    ),
+    pool.query(
+      `SELECT
+         cafe_id,
+         MAX(date)::date AS last_daily_log_date,
+         COUNT(*) FILTER (WHERE date >= $1::date AND date <= $2::date)::int AS log_count_in_range
+       FROM daily_logs
+       WHERE cafe_id = ANY($3::int[])
+       GROUP BY cafe_id`,
+      [range.startDate, range.endDate, cafeIds]
+    ),
+    pool.query(
+      `SELECT
+         cafe_id,
+         MAX(date)::date AS last_prep_date,
+         COUNT(*) FILTER (WHERE date = $1::date)::int AS prep_items_today,
+         COUNT(*) FILTER (WHERE date >= $2::date AND date <= $3::date)::int AS prep_rows_in_range,
+         COUNT(*) FILTER (WHERE date >= $2::date AND date <= $3::date AND completed = true)::int AS prep_completed_in_range,
+         COUNT(*) FILTER (WHERE date >= $2::date AND date <= $3::date AND actual_prepped_quantity IS NOT NULL)::int AS prep_actuals_in_range
+       FROM prep_lists
+       WHERE cafe_id = ANY($4::int[])
+       GROUP BY cafe_id`,
+      [today, range.startDate, range.endDate, cafeIds]
+    ),
+    pool.query(
+      `SELECT
+         i.cafe_id,
+         COUNT(DISTINCT i.id) FILTER (WHERE i.active = true)::int AS active_items,
+         COUNT(DISTINCT CASE WHEN i.active = true AND r.item_id IS NOT NULL THEN i.id END)::int AS items_with_recipes
+       FROM items i
+       LEFT JOIN recipes r ON r.cafe_id = i.cafe_id AND r.item_id = i.id
+       WHERE i.cafe_id = ANY($1::int[])
+       GROUP BY i.cafe_id`,
+      [cafeIds]
+    ),
+    pool.query(
+      `SELECT cafe_id, COUNT(*)::int AS ingredients_missing_unit
+       FROM ingredients
+       WHERE cafe_id = ANY($1::int[])
+         AND COALESCE(TRIM(unit), '') = ''
+       GROUP BY cafe_id`,
+      [cafeIds]
+    ),
+    pool.query(
+      `SELECT cafe_id, COUNT(*)::int AS duplicate_item_groups
+       FROM (
+         SELECT cafe_id, LOWER(TRIM(name)) AS normalized_name
+         FROM items
+         WHERE cafe_id = ANY($1::int[]) AND active = true
+         GROUP BY cafe_id, LOWER(TRIM(name))
+         HAVING COUNT(*) > 1
+       ) grouped
+       GROUP BY cafe_id`,
+      [cafeIds]
+    ),
+    pool.query(
+      `SELECT t.cafe_id, COUNT(*)::int AS unmapped_transactions
+       FROM transactions t
+       LEFT JOIN items i
+         ON i.cafe_id = t.cafe_id
+        AND (i.id = t.item_id OR LOWER(TRIM(i.name)) = LOWER(TRIM(t.item_name)))
+       WHERE t.cafe_id = ANY($1::int[])
+         AND t.date >= $2::date
+         AND t.date <= $3::date
+         AND i.id IS NULL
+       GROUP BY t.cafe_id`,
+      [cafeIds, range.startDate, range.endDate]
+    ),
+    pool.query(
+      `SELECT
+         i.cafe_id,
+         COUNT(DISTINCT i.id) FILTER (WHERE i.active = true)::int AS active_items,
+         COUNT(DISTINCT ils.item_id)::int AS learning_items
+       FROM items i
+       LEFT JOIN item_learning_state ils
+         ON ils.cafe_id = i.cafe_id
+        AND ils.item_id = i.id
+       WHERE i.cafe_id = ANY($1::int[])
+       GROUP BY i.cafe_id`,
+      [cafeIds]
+    ),
+    pool.query(
+      `SELECT
+         cafe_id,
+         COUNT(*) FILTER (WHERE forecast_date >= $1::date AND forecast_date <= $2::date AND actual_qty IS NOT NULL)::int AS actual_forecast_samples,
+         AVG(ABS(error_pct)) FILTER (WHERE forecast_date >= $1::date AND forecast_date <= $2::date AND actual_qty IS NOT NULL) AS avg_abs_error_pct,
+         COUNT(*) FILTER (WHERE forecast_date >= $1::date AND forecast_date <= $2::date AND ai_applied = true)::int AS ai_applied_count
+       FROM forecast_item_actuals
+       WHERE cafe_id = ANY($3::int[])
+       GROUP BY cafe_id`,
+      [range.startDate, range.endDate, cafeIds]
+    ),
+    pool.query(
+      `SELECT *
+       FROM admin_audit_events
+       ORDER BY created_at DESC
+       LIMIT 40`
+    )
+  ]);
+
+  const metricsByCafeId = new Map(metricsEntries);
+  const txByCafeId = mapRowsByCafeId(transactionFreshness.rows);
+  const logsByCafeId = mapRowsByCafeId(logFreshness.rows);
+  const prepByCafeId = mapRowsByCafeId(prepFreshness.rows);
+  const recipeByCafeId = mapRowsByCafeId(recipeCoverage.rows);
+  const unitsByCafeId = mapRowsByCafeId(ingredientUnitGaps.rows);
+  const duplicateByCafeId = mapRowsByCafeId(duplicateItems.rows);
+  const unmappedByCafeId = mapRowsByCafeId(unmappedTransactions.rows);
+  const learningByCafeId = mapRowsByCafeId(learningCoverage.rows);
+  const forecastByCafeId = mapRowsByCafeId(forecastPerformance.rows);
+
+  const cafeHealth = cafes.map((cafe) => {
+    const metrics = metricsByCafeId.get(cafe.id) || null;
+    const txRow = txByCafeId.get(cafe.id) || {};
+    const logRow = logsByCafeId.get(cafe.id) || {};
+    const prepRow = prepByCafeId.get(cafe.id) || {};
+    const recipeRow = recipeByCafeId.get(cafe.id) || {};
+    const unitRow = unitsByCafeId.get(cafe.id) || {};
+    const duplicateRow = duplicateByCafeId.get(cafe.id) || {};
+    const unmappedRow = unmappedByCafeId.get(cafe.id) || {};
+    const learningRow = learningByCafeId.get(cafe.id) || {};
+    const forecastRow = forecastByCafeId.get(cafe.id) || {};
+
+    return summarizeCafeHealth(cafe, metrics, {
+      ownerAccessCount: Number(cafe.owner_access_count || 0),
+      activeItems: Number(recipeRow.active_items || learningRow.active_items || 0),
+      itemsWithRecipes: Number(recipeRow.items_with_recipes || 0),
+      ingredientsMissingUnit: Number(unitRow.ingredients_missing_unit || 0),
+      duplicateItemGroups: Number(duplicateRow.duplicate_item_groups || 0),
+      unmappedTransactions: Number(unmappedRow.unmapped_transactions || 0),
+      learningItems: Number(learningRow.learning_items || 0),
+      avgAbsErrorPct: forecastRow.avg_abs_error_pct === null || forecastRow.avg_abs_error_pct === undefined
+        ? null
+        : Number(forecastRow.avg_abs_error_pct),
+      actualForecastSamples: Number(forecastRow.actual_forecast_samples || 0),
+      aiAppliedCount: Number(forecastRow.ai_applied_count || 0),
+      prepRowsInRange: Number(prepRow.prep_rows_in_range || 0),
+      prepCompletedInRange: Number(prepRow.prep_completed_in_range || 0),
+      prepActualsInRange: Number(prepRow.prep_actuals_in_range || 0),
+      prepItemsToday: Number(prepRow.prep_items_today || 0),
+      logCountInRange: Number(logRow.log_count_in_range || 0),
+      lastTransactionDate: normalizeIsoDate(txRow.last_transaction_date),
+      lastDailyLogDate: normalizeIsoDate(logRow.last_daily_log_date),
+      lastPrepDate: normalizeIsoDate(prepRow.last_prep_date),
+      daysSinceTransaction: diffDaysFromToday(txRow.last_transaction_date),
+      daysSinceDailyLog: diffDaysFromToday(logRow.last_daily_log_date),
+      daysSincePrep: diffDaysFromToday(prepRow.last_prep_date),
+      rangeDayCount
+    });
+  });
+
+  const flattenedAlerts = cafeHealth
+    .flatMap((row) => row.alerts.map((alert) => ({
+      ...alert,
+      cafeId: row.cafeId,
+      cafeName: row.cafeName,
+      city: row.city,
+      riskLevel: row.riskLevel
+    })))
+    .sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
+
+  const overview = {
+    activeCafes: cafeHealth.length,
+    cafesReporting: cafeHealth.filter((row) => row.logCountInRange > 0 || row.prepRowsInRange > 0).length,
+    totalSavings: Math.round(cafeHealth.reduce((sum, row) => sum + row.totalSavings, 0)),
+    wasteSaved: Math.round(cafeHealth.reduce((sum, row) => sum + row.wasteSaved, 0)),
+    labourSaved: Math.round(cafeHealth.reduce((sum, row) => sum + row.labourSaved, 0)),
+    recorded86: Math.round(cafeHealth.reduce((sum, row) => sum + row.recorded86, 0)),
+    avgForecastAccuracy: Math.round(averageNumbers(cafeHealth.map((row) => row.forecastAccuracy))),
+    avgActualCaptureRate: Math.round(averageNumbers(cafeHealth.map((row) => row.actualCaptureRate))),
+    avgReportingRate: Math.round(averageNumbers(cafeHealth.map((row) => row.reportingRate))),
+    prepReadyToday: cafeHealth.filter((row) => row.prepItemsToday > 0).length,
+    criticalAlerts: flattenedAlerts.filter((alert) => ['critical', 'high'].includes(alert.severity)).length
+  };
+
+  const chartSeries = {
+    savingsByCafe: [...cafeHealth]
+      .sort((a, b) => b.totalSavings - a.totalSavings)
+      .slice(0, 8)
+      .map((row) => ({
+        cafeId: row.cafeId,
+        cafeName: row.cafeName,
+        totalSavings: row.totalSavings,
+        forecastAccuracy: row.forecastAccuracy,
+        riskScore: row.riskScore
+      }))
+  };
+
+  const benchmarking = {
+    topSavings: [...cafeHealth]
+      .sort((a, b) => b.totalSavings - a.totalSavings)
+      .slice(0, 5),
+    topAccuracy: [...cafeHealth]
+      .sort((a, b) => b.forecastAccuracy - a.forecastAccuracy)
+      .slice(0, 5),
+    strongestAdoption: [...cafeHealth]
+      .sort((a, b) => b.actualCaptureRate - a.actualCaptureRate)
+      .slice(0, 5),
+    highestRisk: [...cafeHealth]
+      .sort((a, b) => b.riskScore - a.riskScore)
+      .slice(0, 5)
+  };
+
+  const dataQuality = {
+    summary: {
+      duplicateItemGroups: cafeHealth.reduce((sum, row) => sum + row.duplicateItemGroups, 0),
+      ingredientsMissingUnit: cafeHealth.reduce((sum, row) => sum + row.ingredientsMissingUnit, 0),
+      unmappedTransactions: cafeHealth.reduce((sum, row) => sum + row.unmappedTransactions, 0),
+      lowRecipeCoverageCafes: cafeHealth.filter((row) => row.activeItems > 0 && row.recipeCoveragePct < 80).length
+    },
+    cafes: [...cafeHealth]
+      .sort((a, b) =>
+        (b.duplicateItemGroups + b.ingredientsMissingUnit + b.unmappedTransactions) -
+        (a.duplicateItemGroups + a.ingredientsMissingUnit + a.unmappedTransactions)
+      )
+      .slice(0, 8)
+  };
+
+  const modelCenter = {
+    config: {
+      aiEnabled: ['1', 'true', 'yes'].includes(String(process.env.ENABLE_AI_DECISIONS || 'true').trim().toLowerCase()),
+      model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+      learningHistoryDays: Number(process.env.LEARNING_HISTORY_DAYS || 60),
+      confidenceSamples: Number(process.env.LEARNING_CONFIDENCE_SAMPLES || 8),
+      ratioMin: Number(process.env.LEARNING_RATIO_MIN || 0.75),
+      ratioMax: Number(process.env.LEARNING_RATIO_MAX || 1.25)
+    },
+    summary: {
+      cafesLearningDisabled: cafeHealth.filter((row) => !row.learningEnabled).length,
+      cafesAiDisabled: cafeHealth.filter((row) => !row.aiDecisionEnabled).length,
+      avgLearningCoveragePct: Math.round(averageNumbers(cafeHealth.map((row) => row.learningCoveragePct))),
+      avgAbsErrorPct: Math.round(averageNumbers(cafeHealth.map((row) => row.avgAbsErrorPct))),
+      driftCafes: cafeHealth.filter((row) => row.avgAbsErrorPct !== null && row.avgAbsErrorPct > 25).length
+    },
+    cafes: [...cafeHealth]
+      .sort((a, b) => (b.avgAbsErrorPct || 0) - (a.avgAbsErrorPct || 0))
+      .slice(0, 8)
+  };
+
+  const resolvedSelectedCafe =
+    cafeHealth.find((row) => row.cafeId === selectedCafeId)
+    || benchmarking.highestRisk[0]
+    || cafeHealth[0]
+    || null;
+
+  const selectedCafe = resolvedSelectedCafe
+    ? {
+        ...resolvedSelectedCafe,
+        ownerContacts: await getOwnerContactsForCafe(resolvedSelectedCafe.cafeId),
+        recentAudit: auditRows.rows
+          .filter((row) => Number(row.cafe_id) === resolvedSelectedCafe.cafeId)
+          .slice(0, 8)
+          .map(normalizeAuditRow)
+      }
+    : null;
+
+  return {
+    range,
+    overview,
+    chartSeries,
+    cafeHealth,
+    alerts: flattenedAlerts.slice(0, 24),
+    benchmarking,
+    dataQuality,
+    modelCenter,
+    selectedCafe,
+    auditTrail: auditRows.rows.map(normalizeAuditRow)
+  };
+}
+
+// ─── ADMIN HQ ────────────────────────────────────────────────────────────────
+router.get('/admin/hq', async (req, res) => {
+  try {
+    const selectedCafeId = req.query.selectedCafeId ? parseInt(req.query.selectedCafeId, 10) : null;
+    if (req.query.selectedCafeId && Number.isNaN(selectedCafeId)) {
+      return res.status(400).json({ error: 'selectedCafeId must be a valid number' });
+    }
+
+    const snapshot = await buildAdminHqSnapshot({
+      ...resolveDateRangeOptions(req.query),
+      selectedCafeId
+    });
+    res.json(snapshot);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/cafes/:cafeId/support-actions', async (req, res) => {
+  const cafeId = parseInt(req.params.cafeId, 10);
+  const action = String(req.body?.action || '').trim().toLowerCase();
+  const date = normalizeIsoDate(req.body?.date) || isoDateFromDate(new Date());
+  const actorEmail = getAdminActorEmail(req);
+
+  if (Number.isNaN(cafeId)) {
+    return res.status(400).json({ error: 'Invalid cafe id' });
+  }
+
+  const supportedActions = new Set(['send_prep_list', 'rerun_forecast', 'refresh_learning', 'send_check_in']);
+  if (!supportedActions.has(action)) {
+    return res.status(400).json({ error: 'Unsupported support action' });
+  }
+
+  try {
+    const cafeResult = await pool.query('SELECT * FROM cafes WHERE id = $1 AND active = true', [cafeId]);
+    if (!cafeResult.rows.length) {
+      return res.status(404).json({ error: 'Cafe not found' });
+    }
+    const cafe = cafeResult.rows[0];
+
+    let response;
+    if (action === 'send_prep_list') {
+      const forecast = await forecastService.generateForecast(cafeId, date);
+      const emailResult = await emailService.sendPrepList(cafe, forecast);
+      response = {
+        ok: true,
+        action,
+        date,
+        message: 'Prep list re-sent to cafe contacts.',
+        recipient: emailResult?.to || cafe.kitchen_lead_email || cafe.email
+      };
+    } else if (action === 'rerun_forecast') {
+      const forecast = await forecastService.generateForecast(cafeId, date);
+      if (!forecast.closed) {
+        await forecastService.savePrepList(cafeId, date, forecast.prepList);
+      }
+      response = {
+        ok: true,
+        action,
+        date,
+        message: forecast.closed
+          ? 'Cafe is closed on the selected date. No prep list generated.'
+          : 'Forecast rerun completed and prep list refreshed.',
+        learning: forecast.learning,
+        aiDecision: forecast.aiDecision
+      };
+    } else if (action === 'refresh_learning') {
+      const forecast = await forecastService.generateForecast(cafeId, date);
+      response = {
+        ok: true,
+        action,
+        date,
+        message: 'Learning state refreshed from latest actuals.',
+        learning: forecast.learning,
+        aiDecision: forecast.aiDecision
+      };
+    } else {
+      const emailResult = await emailService.sendDailyCheckIn(cafe);
+      response = {
+        ok: true,
+        action,
+        date,
+        message: 'Daily check-in reminder sent.',
+        recipient: emailResult?.to || cafe.kitchen_lead_email || cafe.email
+      };
+    }
+
+    await writeAdminAuditEvent({
+      eventType: `support.${action}`,
+      severity: action === 'send_prep_list' ? 'info' : 'medium',
+      cafeId,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${cafe.name}: ${response.message}`,
+      details: {
+        action,
+        date,
+        recipient: response.recipient || null
+      }
+    });
+
+    res.json(response);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/admin/cafes/:cafeId/model-controls', async (req, res) => {
+  const cafeId = parseInt(req.params.cafeId, 10);
+  const actorEmail = getAdminActorEmail(req);
+
+  if (Number.isNaN(cafeId)) {
+    return res.status(400).json({ error: 'Invalid cafe id' });
+  }
+
+  const learningEnabled = parseBooleanValue(req.body?.learning_enabled);
+  const aiDecisionEnabled = parseBooleanValue(req.body?.ai_decision_enabled);
+  const weatherSensitivity = toNumberOrNull(req.body?.weather_sensitivity);
+
+  if (learningEnabled === null && aiDecisionEnabled === null && weatherSensitivity === null) {
+    return res.status(400).json({
+      error: 'Provide learning_enabled, ai_decision_enabled, or weather_sensitivity to update model controls.'
+    });
+  }
+
+  if (weatherSensitivity !== null && (weatherSensitivity < 0.5 || weatherSensitivity > 1.5)) {
+    return res.status(400).json({ error: 'weather_sensitivity must be between 0.5 and 1.5' });
+  }
+
+  const updates = [];
+  const values = [];
+  let idx = 1;
+
+  if (learningEnabled !== null) {
+    updates.push(`learning_enabled = $${idx++}`);
+    values.push(learningEnabled);
+  }
+  if (aiDecisionEnabled !== null) {
+    updates.push(`ai_decision_enabled = $${idx++}`);
+    values.push(aiDecisionEnabled);
+  }
+  if (weatherSensitivity !== null) {
+    updates.push(`weather_sensitivity = $${idx++}`);
+    values.push(weatherSensitivity);
+  }
+
+  values.push(cafeId);
+
+  try {
+    const result = await pool.query(
+      `UPDATE cafes
+       SET ${updates.join(', ')}
+       WHERE id = $${idx}
+       RETURNING *`,
+      values
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Cafe not found' });
+    }
+
+    const updatedCafe = result.rows[0];
+
+    await writeAdminAuditEvent({
+      eventType: 'model_controls.updated',
+      severity: 'info',
+      cafeId,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${updatedCafe.name}: model controls updated`,
+      details: {
+        learning_enabled: updatedCafe.learning_enabled,
+        ai_decision_enabled: updatedCafe.ai_decision_enabled,
+        weather_sensitivity: updatedCafe.weather_sensitivity
+      }
+    });
+
+    res.json(updatedCafe);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 function requireOwnerAuth(req, res, next) {
   const secret = getOwnerAuthSecret();
   if (!secret) {
@@ -1601,6 +2504,7 @@ router.get('/admin/owners', async (req, res) => {
 router.post('/admin/owners', async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const fullName = String(req.body?.full_name || '').trim() || null;
+  const actorEmail = getAdminActorEmail(req);
   const cafeIds = Array.from(new Set(
     (Array.isArray(req.body?.cafe_ids) ? req.body.cafe_ids : [])
       .map((value) => parseInt(value, 10))
@@ -1661,6 +2565,18 @@ router.post('/admin/owners', async (req, res) => {
 
     const owners = await listOwners({ includeInactive: true });
     const ownerPayload = owners.find((entry) => entry.id === ownerId) || null;
+    await writeAdminAuditEvent({
+      eventType: created ? 'owner.created' : 'owner.access_updated',
+      severity: 'info',
+      cafeId: cafeIds[0] || null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${email}: ${created ? 'owner created' : 'owner access updated'}`,
+      details: {
+        owner_id: ownerId,
+        cafe_ids: cafeIds
+      }
+    });
     return res.status(created ? 201 : 200).json(ownerPayload || { id: ownerId, email, full_name: fullName, cafes: [] });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -1672,6 +2588,7 @@ router.post('/admin/owners', async (req, res) => {
 
 router.patch('/admin/owners/:ownerId', async (req, res) => {
   const ownerId = parseInt(req.params.ownerId, 10);
+  const actorEmail = getAdminActorEmail(req);
   if (Number.isNaN(ownerId)) {
     return res.status(400).json({ error: 'Invalid owner id' });
   }
@@ -1704,6 +2621,18 @@ router.patch('/admin/owners/:ownerId', async (req, res) => {
 
     const owners = await listOwners({ includeInactive: true });
     const updated = owners.find((entry) => entry.id === ownerId);
+    await writeAdminAuditEvent({
+      eventType: 'owner.updated',
+      severity: 'info',
+      cafeId: updated?.cafes?.[0]?.id || null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${nextEmail}: owner profile updated`,
+      details: {
+        owner_id: ownerId,
+        active: nextActive
+      }
+    });
     return res.json(updated || { ...existing, email: nextEmail, full_name: nextName, active: nextActive });
   } catch (err) {
     return sendOwnerWriteError(res, err);
@@ -1712,6 +2641,7 @@ router.patch('/admin/owners/:ownerId', async (req, res) => {
 
 router.delete('/admin/owners/:ownerId', async (req, res) => {
   const ownerId = parseInt(req.params.ownerId, 10);
+  const actorEmail = getAdminActorEmail(req);
   if (Number.isNaN(ownerId)) {
     return res.status(400).json({ error: 'Invalid owner id' });
   }
@@ -1730,6 +2660,15 @@ router.delete('/admin/owners/:ownerId', async (req, res) => {
       return res.status(404).json({ error: 'Owner not found' });
     }
 
+    await writeAdminAuditEvent({
+      eventType: 'owner.deactivated',
+      severity: 'medium',
+      cafeId: null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${result.rows[0].email}: owner account deactivated`,
+      details: { owner_id: ownerId }
+    });
     return res.json({ deleted: true, owner: result.rows[0] });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -1739,6 +2678,7 @@ router.delete('/admin/owners/:ownerId', async (req, res) => {
 router.post('/admin/owners/:ownerId/cafes', async (req, res) => {
   const ownerId = parseInt(req.params.ownerId, 10);
   const cafeId = parseInt(req.body?.cafe_id, 10);
+  const actorEmail = getAdminActorEmail(req);
 
   if (Number.isNaN(ownerId) || Number.isNaN(cafeId)) {
     return res.status(400).json({ error: 'ownerId and cafe_id are required' });
@@ -1757,6 +2697,15 @@ router.post('/admin/owners/:ownerId/cafes', async (req, res) => {
 
     const owners = await listOwners({ includeInactive: true });
     const updated = owners.find((entry) => entry.id === ownerId);
+    await writeAdminAuditEvent({
+      eventType: 'owner.cafe_assigned',
+      severity: 'info',
+      cafeId,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${owner.email}: assigned to cafe ${cafeId}`,
+      details: { owner_id: ownerId, cafe_id: cafeId }
+    });
     return res.json(updated || owner);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -1766,6 +2715,7 @@ router.post('/admin/owners/:ownerId/cafes', async (req, res) => {
 router.delete('/admin/owners/:ownerId/cafes/:cafeId', async (req, res) => {
   const ownerId = parseInt(req.params.ownerId, 10);
   const cafeId = parseInt(req.params.cafeId, 10);
+  const actorEmail = getAdminActorEmail(req);
 
   if (Number.isNaN(ownerId) || Number.isNaN(cafeId)) {
     return res.status(400).json({ error: 'Invalid ownerId or cafeId' });
@@ -1779,6 +2729,15 @@ router.delete('/admin/owners/:ownerId/cafes/:cafeId', async (req, res) => {
 
     const owners = await listOwners({ includeInactive: true });
     const updated = owners.find((entry) => entry.id === ownerId);
+    await writeAdminAuditEvent({
+      eventType: 'owner.cafe_unassigned',
+      severity: 'medium',
+      cafeId,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `Owner ${ownerId}: removed from cafe ${cafeId}`,
+      details: { owner_id: ownerId, cafe_id: cafeId }
+    });
     return res.json(updated || { id: ownerId });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -1788,6 +2747,7 @@ router.delete('/admin/owners/:ownerId/cafes/:cafeId', async (req, res) => {
 router.post('/admin/owners/:ownerId/send-invite', async (req, res) => {
   const ownerId = parseInt(req.params.ownerId, 10);
   const secret = getOwnerAuthSecret();
+  const actorEmail = getAdminActorEmail(req);
 
   if (Number.isNaN(ownerId)) {
     return res.status(400).json({ error: 'Invalid owner id' });
@@ -1811,7 +2771,8 @@ router.post('/admin/owners/:ownerId/send-invite', async (req, res) => {
 
     const code = createOwnerCode();
     ownerCodeStore.set(owner.email, {
-      codeHash: hashOwnerCode(owner.email, code, secret),
+      emailCodeHash: hashOwnerCode(owner.email, 'email', code, secret),
+      smsCodeHash: null,
       expiresAt: Date.now() + OWNER_CODE_TTL_MINUTES * 60 * 1000
     });
 
@@ -1822,6 +2783,18 @@ router.post('/admin/owners/:ownerId/send-invite', async (req, res) => {
       expiresMinutes: OWNER_CODE_TTL_MINUTES
     });
 
+    await writeAdminAuditEvent({
+      eventType: 'owner.invite_sent',
+      severity: 'info',
+      cafeId: access.cafes[0]?.id || null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${owner.email}: owner invite sent`,
+      details: {
+        owner_id: ownerId,
+        cafe_ids: access.cafes.map((cafe) => cafe.id)
+      }
+    });
     return res.json({
       ok: true,
       ownerId: owner.id,
@@ -1869,6 +2842,7 @@ router.post('/cafes', async (req, res) => {
     kitchen_lead_email,
     prep_send_time
   } = req.body;
+  const actorEmail = getAdminActorEmail(req);
   try {
     const prepSendTime = prep_send_time || '06:00';
     if (!isValidPrepTime(prepSendTime)) {
@@ -1879,6 +2853,18 @@ router.post('/cafes', async (req, res) => {
       INSERT INTO cafes (name, owner_name, email, city, holiday_behaviour, kitchen_lead_email, prep_send_time)
       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
     `, [name, owner_name, email, city || 'Toronto', holiday_behaviour || 'Manual', kitchen_lead_email, prepSendTime]);
+    await writeAdminAuditEvent({
+      eventType: 'cafe.created',
+      severity: 'info',
+      cafeId: result.rows[0].id,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${result.rows[0].name}: cafe created`,
+      details: {
+        city: result.rows[0].city,
+        prep_send_time: result.rows[0].prep_send_time
+      }
+    });
     res.status(201).json(result.rows[0]);
   } catch (err) {
     sendCafeWriteError(res, err);
@@ -1922,6 +2908,7 @@ router.put('/cafes/:id', async (req, res) => {
 });
 
 router.patch('/cafes/:id', async (req, res) => {
+  const actorEmail = getAdminActorEmail(req);
   try {
     const existing = await pool.query('SELECT * FROM cafes WHERE id = $1', [req.params.id]);
     if (!existing.rows.length) {
@@ -1970,6 +2957,20 @@ router.patch('/cafes/:id', async (req, res) => {
       req.params.id
     ]);
 
+    await writeAdminAuditEvent({
+      eventType: 'cafe.updated',
+      severity: 'info',
+      cafeId: updated.rows[0].id,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${updated.rows[0].name}: cafe settings updated`,
+      details: {
+        city: updated.rows[0].city,
+        holiday_behaviour: updated.rows[0].holiday_behaviour,
+        prep_send_time: updated.rows[0].prep_send_time,
+        active: updated.rows[0].active
+      }
+    });
     res.json(updated.rows[0]);
   } catch (err) {
     sendCafeWriteError(res, err);
@@ -1978,6 +2979,7 @@ router.patch('/cafes/:id', async (req, res) => {
 
 router.delete('/cafes/:id', async (req, res) => {
   const mode = String(req.query.mode || 'soft').trim().toLowerCase();
+  const actorEmail = getAdminActorEmail(req);
 
   try {
     if (mode === 'hard') {
@@ -2001,6 +3003,15 @@ router.delete('/cafes/:id', async (req, res) => {
         return res.status(404).json({ error: 'Cafe not found' });
       }
 
+      await writeAdminAuditEvent({
+        eventType: 'cafe.deleted',
+        severity: 'high',
+        cafeId: deleted.rows[0].id,
+        actorEmail,
+        actorSource: 'admin_portal',
+        summary: `${deleted.rows[0].name}: cafe permanently deleted`,
+        details: { mode: 'hard' }
+      });
       return res.json({
         deleted: true,
         mode: 'hard',
@@ -2017,6 +3028,15 @@ router.delete('/cafes/:id', async (req, res) => {
       return res.status(404).json({ error: 'Cafe not found' });
     }
 
+    await writeAdminAuditEvent({
+      eventType: 'cafe.deactivated',
+      severity: 'medium',
+      cafeId: softDeleted.rows[0].id,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${softDeleted.rows[0].name}: cafe deactivated`,
+      details: { mode: 'soft' }
+    });
     res.json({
       deleted: true,
       mode: 'soft',
@@ -2029,6 +3049,7 @@ router.delete('/cafes/:id', async (req, res) => {
 
 router.patch('/cafes/:id/prep-time', async (req, res) => {
   const { prep_send_time } = req.body || {};
+  const actorEmail = getAdminActorEmail(req);
 
   if (!isValidPrepTime(prep_send_time)) {
     return res.status(400).json({ error: 'prep_send_time must be in HH:MM (24-hour) format' });
@@ -2044,6 +3065,15 @@ router.patch('/cafes/:id/prep-time', async (req, res) => {
       return res.status(404).json({ error: 'Cafe not found' });
     }
 
+    await writeAdminAuditEvent({
+      eventType: 'cafe.prep_time_updated',
+      severity: 'info',
+      cafeId: result.rows[0].id,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `${result.rows[0].name}: prep dispatch time updated`,
+      details: { prep_send_time: result.rows[0].prep_send_time }
+    });
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2792,6 +3822,19 @@ router.post('/admin/run-prep-now', async (req, res) => {
       dispatchDate: date,
       force: Boolean(force),
       source: 'manual_api'
+    });
+    await writeAdminAuditEvent({
+      eventType: 'support.run_prep_now',
+      severity: 'medium',
+      cafeId: null,
+      actorEmail: null,
+      actorSource: 'manual_api',
+      summary: `Manual fleet prep dispatch triggered for ${result.cafesProcessed || 0} cafe(s)`,
+      details: {
+        cafeIds,
+        dispatchDate: date,
+        force: Boolean(force)
+      }
     });
     res.json(result);
   } catch (err) {
