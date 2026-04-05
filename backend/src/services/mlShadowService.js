@@ -99,7 +99,7 @@ async function upsertModelVersion(input = {}, client = pool) {
         created_at,
         activated_at
       )
-      VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, NOW(), CASE WHEN $4 = 'active' THEN NOW() ELSE NULL END)
+      VALUES ($1::text, $2::text, $3::text, $4::text, $5::jsonb, $6::jsonb, $7::text, $8::date, $9::date, $10::int, NOW(), CASE WHEN $4::text = 'active' THEN NOW() ELSE NULL END)
       ON CONFLICT (model_key)
       DO UPDATE SET
         display_name = EXCLUDED.display_name,
@@ -151,7 +151,7 @@ async function createShadowImportRun(client, { modelVersionId = null, cafeId = n
         updated_at,
         config
       )
-      VALUES ($1, $2, $3, $4, 'shadow_prediction_import', 'running', $5, $6, NOW(), NOW(), NOW(), $7::jsonb)
+      VALUES ($1::int, $2::int, $3::text, $4::text, 'shadow_prediction_import', 'running', $5::date, $6::date, NOW(), NOW(), NOW(), $7::jsonb)
       RETURNING *
     `,
     [modelVersionId, cafeId, requestedBy, source, startDate, endDate, JSON.stringify(config || {})]
@@ -166,11 +166,11 @@ async function finalizeShadowImportRun(client, trainingRunId, payload = {}) {
   const result = await client.query(
     `
       UPDATE ml_training_runs
-      SET status = $2,
-          cafes_processed = $3,
-          items_processed = $4,
-          predictions_written = $5,
-          error_message = $6,
+      SET status = $2::text,
+          cafes_processed = $3::int,
+          items_processed = $4::int,
+          predictions_written = $5::int,
+          error_message = $6::text,
           metrics = COALESCE($7::jsonb, metrics),
           finished_at = NOW(),
           updated_at = NOW()
