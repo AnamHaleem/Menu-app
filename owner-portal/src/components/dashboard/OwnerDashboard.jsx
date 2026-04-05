@@ -13,11 +13,12 @@ const fmt$ = (v) => '$' + Math.round(Number(v) || 0).toLocaleString();
 const fmtPct = (v) => Math.round(Number(v) || 0) + '%';
 const fmtMult = (v) => `${Number(v || 1).toFixed(2)}x`;
 
-export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
+export default function OwnerDashboard({ cafeId, cafeName, dataApi = null, permissions = null }) {
   const metricsClient = dataApi?.metrics || metricsApi;
   const logsClient = dataApi?.logs || logsApi;
   const weatherClient = dataApi?.weather || weatherApi;
   const forecastClient = dataApi?.forecast || forecastApi;
+  const canEdit = permissions ? Boolean(permissions.canEdit) : true;
 
   const [metrics, setMetrics] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -44,6 +45,7 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
   }, [cafeId, metricsClient, logsClient, weatherClient, forecastClient]);
 
   const handleSendPrepList = async () => {
+    if (!canEdit) return;
     setSending(true);
     try {
       const result = await forecastClient.sendEmail(cafeId, new Date().toISOString().split('T')[0]);
@@ -58,6 +60,7 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
   };
 
   const handleLogSubmit = async () => {
+    if (!canEdit) return;
     const today = new Date().toISOString().split('T')[0];
     await logsClient.create(cafeId, { date: today, ...logForm });
     const updated = await logsClient.get(cafeId, 42);
@@ -133,12 +136,17 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
             {weather ? `${weather.condition}, ${weather.temp}°C in Toronto` : 'Loading weather...'}
             {forecast?.isHoliday && <span className="ml-2"><Badge color="amber">{forecast.holidayName}</Badge></span>}
           </p>
+          {!canEdit && (
+            <p className="text-sm text-gray-500 mt-2">
+              This account is view-only for the selected cafe.
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => setShowLogForm(!showLogForm)} size="sm">
+          <Button variant="secondary" onClick={() => setShowLogForm(!showLogForm)} size="sm" disabled={!canEdit}>
             Log today
           </Button>
-          <Button onClick={handleSendPrepList} disabled={sending} size="sm">
+          <Button onClick={handleSendPrepList} disabled={!canEdit || sending} size="sm">
             {sending ? 'Sending...' : 'Send prep list'}
           </Button>
         </div>

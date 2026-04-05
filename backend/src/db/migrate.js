@@ -113,6 +113,11 @@ const migrate = async () => {
     `);
 
     await client.query(`
+      ALTER TABLE owner_users
+      ADD COLUMN IF NOT EXISTS avatar_data_url TEXT;
+    `);
+
+    await client.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_owner_users_email_unique
       ON owner_users (LOWER(email));
     `);
@@ -122,9 +127,27 @@ const migrate = async () => {
         id SERIAL PRIMARY KEY,
         owner_id INTEGER REFERENCES owner_users(id) ON DELETE CASCADE,
         cafe_id INTEGER REFERENCES cafes(id) ON DELETE CASCADE,
+        access_role VARCHAR(16) NOT NULL DEFAULT 'viewer',
+        invited_by_owner_id INTEGER REFERENCES owner_users(id) ON DELETE SET NULL,
         created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
         UNIQUE(owner_id, cafe_id)
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE owner_cafe_access
+      ADD COLUMN IF NOT EXISTS access_role VARCHAR(16) NOT NULL DEFAULT 'viewer';
+    `);
+
+    await client.query(`
+      ALTER TABLE owner_cafe_access
+      ADD COLUMN IF NOT EXISTS invited_by_owner_id INTEGER REFERENCES owner_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE owner_cafe_access
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
     `);
 
     // Backfill owner records from active cafe contacts for smoother rollout.
@@ -168,6 +191,28 @@ const migrate = async () => {
         AND c.kitchen_lead_email IS NOT NULL
         AND TRIM(c.kitchen_lead_email) <> ''
       ON CONFLICT DO NOTHING;
+    `);
+
+    await client.query(`
+      UPDATE owner_cafe_access oca
+      SET access_role = 'owner',
+          updated_at = NOW()
+      FROM owner_users ou
+      JOIN cafes c ON LOWER(TRIM(c.email)) = LOWER(ou.email)
+      WHERE oca.owner_id = ou.id
+        AND oca.cafe_id = c.id
+        AND (oca.access_role IS NULL OR oca.access_role = 'viewer');
+    `);
+
+    await client.query(`
+      UPDATE owner_cafe_access oca
+      SET access_role = 'editor',
+          updated_at = NOW()
+      FROM owner_users ou
+      JOIN cafes c ON LOWER(TRIM(c.kitchen_lead_email)) = LOWER(ou.email)
+      WHERE oca.owner_id = ou.id
+        AND oca.cafe_id = c.id
+        AND (oca.access_role IS NULL OR oca.access_role = 'viewer');
     `);
 
     await client.query(`

@@ -16,10 +16,11 @@ const STATION_DOT = {
   Pastry: 'bg-purple-400'
 };
 
-export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
+export default function KitchenView({ cafeId, cafeName, dataApi = null, permissions = null }) {
   const prepClient = dataApi?.prepList || prepListApi;
   const prepSummaryClient = dataApi?.prepSummary || prepSummaryApi;
   const forecastClient = dataApi?.forecast || forecastApi;
+  const canEdit = permissions ? Boolean(permissions.canEdit) : true;
 
   const [prepList, setPrepList] = useState([]);
   const [prepSummary, setPrepSummary] = useState(null);
@@ -85,6 +86,7 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
   }, [cafeId, prepClient, prepSummaryClient, forecastClient]);
 
   const handleToggle = async (item) => {
+    if (!canEdit) return;
     setSavingToggleId(item.id);
     setError('');
     try {
@@ -115,6 +117,7 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
   };
 
   const handleActualSave = async (item) => {
+    if (!canEdit) return;
     const raw = String(actualInputs[item.id] ?? '').trim();
     const parsed = raw === '' ? null : Number(raw);
 
@@ -148,6 +151,7 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
   };
 
   const handleGenerate = async () => {
+    if (!canEdit) return;
     setGenerating(true);
     setError('');
     try {
@@ -219,6 +223,12 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
             {forecast.learning.enabled
               ? `active — adjusted ${forecast.learning.itemsAdjusted || 0} item(s) using ${forecast.learning.itemsWithHistory || 0} item(s) with history.`
               : 'not active yet. Run backend migrations to enable item-level tuning.'}
+          </div>
+        )}
+
+        {!canEdit && (
+          <div className="bg-gray-100 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-700 mt-3">
+            Your role is view-only for this cafe. You can review the prep plan, but only editors, admins, and owners can make changes.
           </div>
         )}
 
@@ -353,7 +363,7 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
                     <button
                       type="button"
                       onClick={() => handleToggle(item)}
-                      disabled={savingToggleId === item.id}
+                      disabled={!canEdit || savingToggleId === item.id}
                       className={`mt-0.5 w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all
                         ${item.completed ? 'bg-teal-500 border-teal-500' : 'border-gray-300'}`}
                       aria-label={item.completed ? 'Mark as not done' : 'Mark as done'}
@@ -396,6 +406,7 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
                               [item.id]: event.target.value
                             }))}
                             className="w-24 border border-gray-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:border-navy-900"
+                            disabled={!canEdit}
                           />
                           <span className="text-xs text-gray-500">{item.unit}</span>
                         </div>
@@ -404,7 +415,7 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
                           size="sm"
                           variant="secondary"
                           onClick={() => handleActualSave(item)}
-                          disabled={savingActualId === item.id || !hasActualChanged(item)}
+                          disabled={!canEdit || savingActualId === item.id || !hasActualChanged(item)}
                         >
                           {savingActualId === item.id ? 'Saving...' : 'Save actual'}
                         </Button>
@@ -423,7 +434,7 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
         <div className="mt-4 text-center">
           <button
             onClick={handleGenerate}
-            disabled={generating}
+            disabled={!canEdit || generating}
             className="text-xs text-gray-400 hover:text-gray-600 underline"
           >
             {generating ? 'Regenerating...' : 'Regenerate prep list'}

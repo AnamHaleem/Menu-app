@@ -73,14 +73,13 @@ const sendOwnerWriteError = (res, err) => {
 const CANADA_PROVINCES = new Set([
   'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'
 ]);
+const OWNER_ACCESS_ROLES = new Set(['owner', 'admin', 'editor', 'viewer']);
+const OWNER_TEAM_MANAGE_ROLES = new Set(['owner', 'admin']);
+const OWNER_EDIT_ROLES = new Set(['owner', 'admin', 'editor']);
 const REQUIRED_OWNER_PROFILE_FIELDS = [
   'first_name',
   'last_name',
-  'phone',
-  'city',
-  'province',
-  'street_address',
-  'postal_code'
+  'phone'
 ];
 
 const normalizeProvinceCode = (value) => String(value || '').trim().toUpperCase();
@@ -96,6 +95,33 @@ const normalizeCanadianPhone = (value) => {
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
   return null;
+};
+const normalizeOwnerAccessRole = (value, fallback = 'viewer') => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return OWNER_ACCESS_ROLES.has(normalized) ? normalized : fallback;
+};
+const ownerRoleRank = (value) => {
+  const normalized = normalizeOwnerAccessRole(value);
+  return { owner: 0, admin: 1, editor: 2, viewer: 3 }[normalized] ?? 99;
+};
+const buildOwnerPermissions = (accessRole) => {
+  const normalized = normalizeOwnerAccessRole(accessRole);
+  return {
+    canEdit: OWNER_EDIT_ROLES.has(normalized),
+    canManageTeam: OWNER_TEAM_MANAGE_ROLES.has(normalized),
+    canManageSettings: OWNER_TEAM_MANAGE_ROLES.has(normalized)
+  };
+};
+const sanitizeAvatarDataUrl = (value) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return { value: null, error: null };
+  if (!/^data:image\/(png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i.test(trimmed)) {
+    return { value: null, error: 'Profile photo must be a PNG, JPG, WEBP, or GIF image.' };
+  }
+  if (trimmed.length > 1_000_000) {
+    return { value: null, error: 'Profile photo is too large. Please use an image under 700 KB.' };
+  }
+  return { value: trimmed, error: null };
 };
 const isSms2faRequired = () =>
   ['1', 'true', 'yes'].includes(String(process.env.OWNER_REQUIRE_SMS_2FA || '').trim().toLowerCase());
@@ -126,7 +152,18 @@ async function getLegacyOwnerCafesByEmail(email) {
   if (!normalizedEmail) return [];
 
   const result = await pool.query(
-    `SELECT id, name, city, email, kitchen_lead_email, prep_send_time
+    `SELECT
+       id,
+       name,
+       city,
+       email,
+       kitchen_lead_email,
+       prep_send_time,
+       CASE
+         WHEN LOWER(email) = $1 THEN 'owner'
+         WHEN LOWER(COALESCE(kitchen_lead_email, '')) = $1 THEN 'editor'
+         ELSE 'viewer'
+       END AS access_role
      FROM cafes
      WHERE active = true
        AND (
@@ -137,7 +174,11 @@ async function getLegacyOwnerCafesByEmail(email) {
     [normalizedEmail]
   );
 
-  return result.rows;
+  return result.rows.map((row) => ({
+    ...row,
+    access_role: normalizeOwnerAccessRole(row.access_role),
+    permissions: buildOwnerPermissions(row.access_role)
+  }));
 }
 
 async function getOwnerAccessByEmail(email) {
@@ -161,7 +202,14 @@ async function getOwnerAccessByEmail(email) {
     }
 
     const cafesResult = await pool.query(
-      `SELECT c.id, c.name, c.city, c.email, c.kitchen_lead_email, c.prep_send_time
+      `SELECT
+         c.id,
+         c.name,
+         c.city,
+         c.email,
+         c.kitchen_lead_email,
+         c.prep_send_time,
+         oca.access_role
        FROM owner_cafe_access oca
        JOIN cafes c ON c.id = oca.cafe_id
        WHERE oca.owner_id = $1
@@ -170,7 +218,15 @@ async function getOwnerAccessByEmail(email) {
       [owner.id]
     );
 
-    return { owner, cafes: cafesResult.rows, source: 'owner_map' };
+    return {
+      owner,
+      cafes: cafesResult.rows.map((row) => ({
+        ...row,
+        access_role: normalizeOwnerAccessRole(row.access_role),
+        permissions: buildOwnerPermissions(row.access_role)
+      })),
+      source: 'owner_map'
+    };
   }
 
   const cafes = await getLegacyOwnerCafesByEmail(normalizedEmail);
@@ -196,6 +252,7 @@ async function getOwnerById(ownerId) {
        street_address,
        unit_number,
        postal_code,
+       avatar_data_url,
        active,
        created_at,
        updated_at
@@ -221,6 +278,7 @@ async function getOwnerProfileByEmail(email) {
        street_address,
        unit_number,
        postal_code,
+       avatar_data_url,
        active
      FROM owner_users
      WHERE LOWER(email) = $1
@@ -228,6 +286,58 @@ async function getOwnerProfileByEmail(email) {
     [normalizeEmail(email)]
   );
   return result.rows[0] || null;
+}
+
+async function getOwnerSessionByEmail(email) {
+  const normalizedEmail = normalizeEmail(email);
+  const { owner, cafes } = await getOwnerAccessByEmail(normalizedEmail);
+  return {
+    email: normalizedEmail,
+    ownerId: owner?.id || null,
+    profile: await getOwnerProfileByEmail(normalizedEmail),
+    cafes
+  };
+}
+
+async function listCafeTeamMembers(cafeId) {
+  const result = await pool.query(
+    `SELECT
+       o.id,
+       o.email,
+       o.full_name,
+       o.first_name,
+       o.last_name,
+       o.phone,
+       o.secondary_phone,
+       o.city,
+       o.province,
+       o.street_address,
+       o.unit_number,
+       o.postal_code,
+       o.avatar_data_url,
+       o.active,
+       oca.access_role,
+       oca.created_at,
+       oca.updated_at
+     FROM owner_cafe_access oca
+     JOIN owner_users o ON o.id = oca.owner_id
+     WHERE oca.cafe_id = $1
+     ORDER BY
+       CASE LOWER(COALESCE(oca.access_role, 'viewer'))
+         WHEN 'owner' THEN 0
+         WHEN 'admin' THEN 1
+         WHEN 'editor' THEN 2
+         ELSE 3
+       END,
+       COALESCE(NULLIF(TRIM(o.full_name), ''), o.email) ASC`,
+    [cafeId]
+  );
+
+  return result.rows.map((row) => ({
+    ...row,
+    access_role: normalizeOwnerAccessRole(row.access_role),
+    permissions: buildOwnerPermissions(row.access_role)
+  }));
 }
 
 function sanitizeOwnerProfileInput(raw = {}) {
@@ -265,6 +375,10 @@ function mergeOwnerProfile(existing = {}, incoming = {}) {
     ? normalizeCanadianPostalCode(incoming.postal_code_raw)
     : (existing.postal_code || null);
 
+  const avatarDataUrl = Object.prototype.hasOwnProperty.call(incoming, 'avatar_data_url')
+    ? incoming.avatar_data_url
+    : (existing.avatar_data_url || null);
+
   return {
     first_name: incoming.first_name ?? existing.first_name ?? null,
     last_name: incoming.last_name ?? existing.last_name ?? null,
@@ -275,6 +389,7 @@ function mergeOwnerProfile(existing = {}, incoming = {}) {
     street_address: incoming.street_address ?? existing.street_address ?? null,
     unit_number: incoming.unit_number ?? existing.unit_number ?? null,
     postal_code: postalCode,
+    avatar_data_url: avatarDataUrl,
     full_name: [incoming.first_name ?? existing.first_name ?? '', incoming.last_name ?? existing.last_name ?? '']
       .join(' ')
       .trim() || existing.full_name || null
@@ -581,10 +696,26 @@ async function requireOwnerCafeAccess(req, res, next) {
     }
 
     req.ownerCafe = allowedCafe;
+    req.ownerCafeAccessRole = normalizeOwnerAccessRole(allowedCafe.access_role);
+    req.ownerCafePermissions = buildOwnerPermissions(allowedCafe.access_role);
     return next();
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+}
+
+function requireOwnerCafeEditAccess(req, res, next) {
+  if (req.ownerCafePermissions?.canEdit) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Your role is view-only for this cafe.' });
+}
+
+function requireOwnerCafeAdminAccess(req, res, next) {
+  if (req.ownerCafePermissions?.canManageTeam) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Only cafe admins can manage team access.' });
 }
 
 // ─── OWNER AUTH ────────────────────────────────────────────────────────────────
@@ -772,13 +903,13 @@ router.post('/owner-auth/verify-code', async (req, res) => {
     }
 
     ownerCodeStore.delete(email);
-    const { cafes } = await getOwnerAccessByEmail(email);
-    if (!cafes.length) {
+    const session = await getOwnerSessionByEmail(email);
+    if (!session.cafes.length) {
       return res.status(404).json({ error: 'No active cafe found for this account' });
     }
 
     const token = jwt.sign(
-      { role: 'owner', email, cafeIds: cafes.map((cafe) => cafe.id) },
+      { role: 'owner', email, cafeIds: session.cafes.map((cafe) => cafe.id) },
       secret,
       { expiresIn: `${OWNER_SESSION_TTL_HOURS}h` }
     );
@@ -786,11 +917,7 @@ router.post('/owner-auth/verify-code', async (req, res) => {
     return res.json({
       ok: true,
       token,
-      owner: {
-        email,
-        profile: await getOwnerProfileByEmail(email),
-        cafes
-      }
+      owner: session
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -799,16 +926,12 @@ router.post('/owner-auth/verify-code', async (req, res) => {
 
 router.get('/owner-auth/me', requireOwnerAuth, async (req, res) => {
   try {
-    const { cafes } = await getOwnerAccessByEmail(req.owner.email);
-    if (!cafes.length) {
+    const session = await getOwnerSessionByEmail(req.owner.email);
+    if (!session.cafes.length) {
       return res.status(403).json({ error: 'No active cafes found for this account' });
     }
 
-    return res.json({
-      email: req.owner.email,
-      profile: await getOwnerProfileByEmail(req.owner.email),
-      cafes
-    });
+    return res.json(session);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -818,6 +941,266 @@ router.get('/owner/cafes', requireOwnerAuth, async (req, res) => {
   try {
     const { cafes } = await getOwnerAccessByEmail(req.owner.email);
     return res.json(cafes);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/owner/profile', requireOwnerAuth, async (req, res) => {
+  try {
+    const session = await getOwnerSessionByEmail(req.owner.email);
+    return res.json({
+      email: session.email,
+      ownerId: session.ownerId,
+      profile: session.profile,
+      cafes: session.cafes
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/owner/profile', requireOwnerAuth, async (req, res) => {
+  try {
+    const existingProfile = await getOwnerProfileByEmail(req.owner.email);
+    if (!existingProfile?.id) {
+      return res.status(404).json({ error: 'Owner profile not found' });
+    }
+
+    const incomingProfile = sanitizeOwnerProfileInput(req.body || {});
+    const avatarResult = sanitizeAvatarDataUrl(req.body?.avatar_data_url);
+    if (avatarResult.error) {
+      return res.status(400).json({ error: avatarResult.error });
+    }
+
+    const mergedProfile = mergeOwnerProfile(existingProfile, {
+      ...incomingProfile,
+      avatar_data_url: avatarResult.value
+    });
+    const { missingFields, errors } = validateMergedOwnerProfile(mergedProfile);
+
+    if (missingFields.length) {
+      return res.status(400).json({
+        error: 'Please complete all required profile fields before saving.',
+        missingFields
+      });
+    }
+    if (errors.length) {
+      return res.status(400).json({ error: errors[0] });
+    }
+
+    const result = await pool.query(
+      `UPDATE owner_users
+       SET full_name = $1,
+           first_name = $2,
+           last_name = $3,
+           phone = $4,
+           secondary_phone = $5,
+           city = $6,
+           province = $7,
+           street_address = $8,
+           unit_number = $9,
+           postal_code = $10,
+           avatar_data_url = $11,
+           updated_at = NOW()
+       WHERE id = $12
+       RETURNING
+         id,
+         email,
+         full_name,
+         first_name,
+         last_name,
+         phone,
+         secondary_phone,
+         city,
+         province,
+         street_address,
+         unit_number,
+         postal_code,
+         avatar_data_url,
+         active`,
+      [
+        mergedProfile.full_name,
+        mergedProfile.first_name,
+        mergedProfile.last_name,
+        mergedProfile.phone,
+        mergedProfile.secondary_phone,
+        mergedProfile.city,
+        mergedProfile.province,
+        mergedProfile.street_address,
+        mergedProfile.unit_number,
+        mergedProfile.postal_code,
+        mergedProfile.avatar_data_url,
+        existingProfile.id
+      ]
+    );
+
+    return res.json(result.rows[0]);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/owner/cafes/:cafeId/team', requireOwnerAuth, requireOwnerCafeAccess, requireOwnerCafeAdminAccess, async (req, res) => {
+  try {
+    const members = await listCafeTeamMembers(parseInt(req.params.cafeId, 10));
+    return res.json(members);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/owner/cafes/:cafeId/team', requireOwnerAuth, requireOwnerCafeAccess, requireOwnerCafeAdminAccess, async (req, res) => {
+  const cafeId = parseInt(req.params.cafeId, 10);
+  const email = normalizeEmail(req.body?.email);
+  const firstName = String(req.body?.first_name || '').trim() || null;
+  const lastName = String(req.body?.last_name || '').trim() || null;
+  const fullName = String(req.body?.full_name || '').trim() || [firstName, lastName].filter(Boolean).join(' ') || null;
+  const phone = req.body?.phone ? normalizeCanadianPhone(req.body.phone) : null;
+  const accessRole = normalizeOwnerAccessRole(req.body?.access_role, 'viewer');
+
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Valid team member email is required.' });
+  }
+  if (!['admin', 'editor', 'viewer'].includes(accessRole)) {
+    return res.status(400).json({ error: 'Team members can be added as admin, editor, or viewer.' });
+  }
+  if (req.body?.phone && !phone) {
+    return res.status(400).json({ error: 'Phone must be in +1 000-000-0000 format.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const actingProfile = await getOwnerProfileByEmail(req.owner.email);
+    if (!actingProfile?.id) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Current owner profile not found.' });
+    }
+
+    const existingUser = await client.query(
+      `SELECT id, email, first_name, last_name, full_name, phone, active
+       FROM owner_users
+       WHERE LOWER(email) = $1
+       LIMIT 1`,
+      [email]
+    );
+
+    let ownerId;
+    if (existingUser.rows.length) {
+      ownerId = existingUser.rows[0].id;
+      await client.query(
+        `UPDATE owner_users
+         SET first_name = COALESCE($1, first_name),
+             last_name = COALESCE($2, last_name),
+             full_name = COALESCE($3, full_name),
+             phone = COALESCE($4, phone),
+             active = true,
+             updated_at = NOW()
+         WHERE id = $5`,
+        [firstName, lastName, fullName, phone, ownerId]
+      );
+    } else {
+      const inserted = await client.query(
+        `INSERT INTO owner_users (email, full_name, first_name, last_name, phone, active)
+         VALUES ($1, $2, $3, $4, $5, true)
+         RETURNING id`,
+        [email, fullName, firstName, lastName, phone]
+      );
+      ownerId = inserted.rows[0].id;
+    }
+
+    await client.query(
+      `INSERT INTO owner_cafe_access (owner_id, cafe_id, access_role, invited_by_owner_id, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (owner_id, cafe_id) DO UPDATE
+         SET access_role = EXCLUDED.access_role,
+             invited_by_owner_id = EXCLUDED.invited_by_owner_id,
+             updated_at = NOW()`,
+      [ownerId, cafeId, accessRole, actingProfile.id]
+    );
+
+    await client.query('COMMIT');
+    const members = await listCafeTeamMembers(cafeId);
+    const member = members.find((entry) => entry.id === ownerId) || null;
+    return res.status(201).json({ ok: true, member, members });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    return sendOwnerWriteError(res, err);
+  } finally {
+    client.release();
+  }
+});
+
+router.patch('/owner/cafes/:cafeId/team/:memberOwnerId', requireOwnerAuth, requireOwnerCafeAccess, requireOwnerCafeAdminAccess, async (req, res) => {
+  const cafeId = parseInt(req.params.cafeId, 10);
+  const memberOwnerId = parseInt(req.params.memberOwnerId, 10);
+  const requestedRole = normalizeOwnerAccessRole(req.body?.access_role, '');
+
+  if (Number.isNaN(memberOwnerId)) {
+    return res.status(400).json({ error: 'Invalid team member id.' });
+  }
+  if (!requestedRole || !['admin', 'editor', 'viewer'].includes(requestedRole)) {
+    return res.status(400).json({ error: 'Valid role is required (admin, editor, or viewer).' });
+  }
+
+  try {
+    const currentMembers = await listCafeTeamMembers(cafeId);
+    const member = currentMembers.find((entry) => entry.id === memberOwnerId);
+    if (!member) {
+      return res.status(404).json({ error: 'Team member not found for this cafe.' });
+    }
+    if (member.access_role === 'owner') {
+      return res.status(400).json({ error: 'Owner access cannot be changed from the cafe portal.' });
+    }
+
+    const result = await pool.query(
+      `UPDATE owner_cafe_access
+       SET access_role = $1,
+           updated_at = NOW()
+       WHERE cafe_id = $2 AND owner_id = $3
+       RETURNING owner_id`,
+      [requestedRole, cafeId, memberOwnerId]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Team member not found for this cafe.' });
+    }
+
+    const members = await listCafeTeamMembers(cafeId);
+    const updatedMember = members.find((entry) => entry.id === memberOwnerId) || null;
+    return res.json({ ok: true, member: updatedMember, members });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/owner/cafes/:cafeId/team/:memberOwnerId', requireOwnerAuth, requireOwnerCafeAccess, requireOwnerCafeAdminAccess, async (req, res) => {
+  const cafeId = parseInt(req.params.cafeId, 10);
+  const memberOwnerId = parseInt(req.params.memberOwnerId, 10);
+
+  if (Number.isNaN(memberOwnerId)) {
+    return res.status(400).json({ error: 'Invalid team member id.' });
+  }
+
+  try {
+    const currentMembers = await listCafeTeamMembers(cafeId);
+    const member = currentMembers.find((entry) => entry.id === memberOwnerId);
+    if (!member) {
+      return res.status(404).json({ error: 'Team member not found for this cafe.' });
+    }
+    if (member.access_role === 'owner') {
+      return res.status(400).json({ error: 'Owner access cannot be removed from the cafe portal.' });
+    }
+
+    await pool.query(
+      `DELETE FROM owner_cafe_access
+       WHERE cafe_id = $1 AND owner_id = $2`,
+      [cafeId, memberOwnerId]
+    );
+
+    return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -1814,7 +2197,7 @@ router.get('/owner/cafes/:cafeId/prep-list', requireOwnerAuth, requireOwnerCafeA
   }
 });
 
-router.patch('/owner/cafes/:cafeId/prep-list/:prepId', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+router.patch('/owner/cafes/:cafeId/prep-list/:prepId', requireOwnerAuth, requireOwnerCafeAccess, requireOwnerCafeEditAccess, async (req, res) => {
   const completedProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'completed');
   const actualQtyProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'actual_prepped_quantity');
   const actualNotesProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'actual_notes');
@@ -1883,7 +2266,7 @@ router.get('/owner/cafes/:cafeId/prep-summary', requireOwnerAuth, requireOwnerCa
   }
 });
 
-router.post('/owner/cafes/:cafeId/forecast/generate', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+router.post('/owner/cafes/:cafeId/forecast/generate', requireOwnerAuth, requireOwnerCafeAccess, requireOwnerCafeEditAccess, async (req, res) => {
   const date = req.body.date || new Date().toISOString().split('T')[0];
   try {
     const forecast = await forecastService.generateForecast(parseInt(req.params.cafeId, 10), date);
@@ -1910,7 +2293,7 @@ router.get('/owner/cafes/:cafeId/logs', requireOwnerAuth, requireOwnerCafeAccess
   }
 });
 
-router.post('/owner/cafes/:cafeId/logs', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+router.post('/owner/cafes/:cafeId/logs', requireOwnerAuth, requireOwnerCafeAccess, requireOwnerCafeEditAccess, async (req, res) => {
   const { date, waste_items, waste_value, items_86d, actual_covers, notes } = req.body;
   try {
     const result = await pool.query(`
@@ -1936,7 +2319,7 @@ router.get('/owner/cafes/:cafeId/metrics', requireOwnerAuth, requireOwnerCafeAcc
   }
 });
 
-router.post('/owner/cafes/:cafeId/send-prep-list', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+router.post('/owner/cafes/:cafeId/send-prep-list', requireOwnerAuth, requireOwnerCafeAccess, requireOwnerCafeEditAccess, async (req, res) => {
   const date = req.body.date || new Date().toISOString().split('T')[0];
   try {
     const cafeResult = await pool.query('SELECT * FROM cafes WHERE id = $1 AND active = true', [req.params.cafeId]);

@@ -78,6 +78,18 @@ export const ownerPortalApi = {
   cafes: {
     getAll: () => ownerApi.get('/owner/cafes').then((response) => toArray(response.data))
   },
+  profile: {
+    get: () => ownerApi.get('/owner/profile').then((response) => response.data),
+    update: (data) => ownerApi.patch('/owner/profile', data).then((response) => response.data)
+  },
+  team: {
+    list: (cafeId) => ownerApi.get(`/owner/cafes/${cafeId}/team`).then((response) => toArray(response.data)),
+    create: (cafeId, data) => ownerApi.post(`/owner/cafes/${cafeId}/team`, data).then((response) => response.data),
+    update: (cafeId, memberOwnerId, data) =>
+      ownerApi.patch(`/owner/cafes/${cafeId}/team/${memberOwnerId}`, data).then((response) => response.data),
+    remove: (cafeId, memberOwnerId) =>
+      ownerApi.delete(`/owner/cafes/${cafeId}/team/${memberOwnerId}`).then((response) => response.data)
+  },
   metrics: {
     get: (cafeId) => ownerApi.get(`/owner/cafes/${cafeId}/metrics`).then((response) => response.data)
   },

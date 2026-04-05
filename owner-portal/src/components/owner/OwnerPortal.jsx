@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import OwnerDashboard from '../dashboard/OwnerDashboard';
 import KitchenView from '../kitchen/KitchenView';
+import OwnerSettings from '../settings/OwnerSettings';
 import { Button, Card, Spinner } from '../shared';
 import { ownerAuthApi, ownerPortalApi } from '../../lib/api';
 
@@ -94,6 +95,22 @@ export default function OwnerPortal() {
   const [info, setInfo] = useState('');
   const [selectedCafeId, setSelectedCafeId] = useState(readOwnerSelectedCafeId());
 
+  const applyOwnerSession = (session) => {
+    setOwner(session || null);
+    setSelectedCafeId((current) => {
+      const cafes = session?.cafes || [];
+      if (!cafes.length) return null;
+      const existing = cafes.find((cafe) => cafe.id === current);
+      return existing ? existing.id : cafes[0].id;
+    });
+  };
+
+  const refreshOwnerSession = async () => {
+    const session = await ownerAuthApi.me();
+    applyOwnerSession(session);
+    return session;
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -107,8 +124,7 @@ export default function OwnerPortal() {
       try {
         const session = await ownerAuthApi.me();
         if (!cancelled) {
-          setOwner(session);
-          setSelectedCafeId((current) => current || session?.cafes?.[0]?.id || null);
+          applyOwnerSession(session);
         }
       } catch {
         ownerAuthApi.clearStoredToken();
@@ -163,11 +179,7 @@ export default function OwnerPortal() {
     'email',
     'first_name',
     'last_name',
-    'phone',
-    'city',
-    'province',
-    'street_address',
-    'postal_code'
+    'phone'
   ];
 
   const handleRequestCode = async () => {
@@ -228,8 +240,7 @@ export default function OwnerPortal() {
         email_code: emailCode.trim(),
         phone_code: requiresPhoneCode ? phoneCode.trim() : ''
       });
-      setOwner(result?.owner || null);
-      setSelectedCafeId(result?.owner?.cafes?.[0]?.id || null);
+      applyOwnerSession(result?.owner || null);
       setEmailCode('');
       setPhoneCode('');
       setCodeSent(false);
@@ -340,7 +351,7 @@ export default function OwnerPortal() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">City *</label>
+              <label className="block text-xs text-gray-400 mb-1">City</label>
               <input
                 value={signInForm.city}
                 onChange={(event) => handleFormChange('city', event.target.value)}
@@ -349,7 +360,7 @@ export default function OwnerPortal() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Province/Territory *</label>
+              <label className="block text-xs text-gray-400 mb-1">Province/Territory</label>
               <select
                 value={signInForm.province}
                 onChange={(event) => handleFormChange('province', event.target.value)}
@@ -364,7 +375,7 @@ export default function OwnerPortal() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Street address *</label>
+              <label className="block text-xs text-gray-400 mb-1">Street address</label>
               <input
                 value={signInForm.street_address}
                 onChange={(event) => handleFormChange('street_address', event.target.value)}
@@ -382,7 +393,7 @@ export default function OwnerPortal() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Postal code *</label>
+              <label className="block text-xs text-gray-400 mb-1">Postal code</label>
               <input
                 value={signInForm.postal_code}
                 onChange={(event) => handleFormChange('postal_code', event.target.value)}
@@ -489,7 +500,10 @@ export default function OwnerPortal() {
             </select>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">
+              {selectedCafe.access_role || 'viewer'}
+            </span>
             <NavLink
               to="dashboard"
               className={({ isActive }) =>
@@ -506,6 +520,14 @@ export default function OwnerPortal() {
             >
               Kitchen
             </NavLink>
+            <NavLink
+              to="settings"
+              className={({ isActive }) =>
+                `px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${isActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-900'}`
+              }
+            >
+              Settings
+            </NavLink>
             <Button size="sm" variant="ghost" onClick={handleSignOut}>Sign out</Button>
           </div>
         </div>
@@ -515,11 +537,38 @@ export default function OwnerPortal() {
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route
           path="dashboard"
-          element={<OwnerDashboard cafeId={selectedCafe.id} cafeName={selectedCafe.name} dataApi={ownerPortalApi} />}
+          element={
+            <OwnerDashboard
+              cafeId={selectedCafe.id}
+              cafeName={selectedCafe.name}
+              dataApi={ownerPortalApi}
+              accessRole={selectedCafe.access_role}
+              permissions={selectedCafe.permissions}
+            />
+          }
         />
         <Route
           path="kitchen"
-          element={<KitchenView cafeId={selectedCafe.id} cafeName={selectedCafe.name} dataApi={ownerPortalApi} />}
+          element={
+            <KitchenView
+              cafeId={selectedCafe.id}
+              cafeName={selectedCafe.name}
+              dataApi={ownerPortalApi}
+              accessRole={selectedCafe.access_role}
+              permissions={selectedCafe.permissions}
+            />
+          }
+        />
+        <Route
+          path="settings"
+          element={
+            <OwnerSettings
+              session={owner}
+              selectedCafe={selectedCafe}
+              onSessionRefresh={refreshOwnerSession}
+              onSignOut={handleSignOut}
+            />
+          }
         />
         <Route path="*" element={<Navigate to="dashboard" replace />} />
       </Routes>
