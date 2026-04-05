@@ -5,7 +5,8 @@ import OwnerDashboard from './components/dashboard/OwnerDashboard';
 import KitchenView from './components/kitchen/KitchenView';
 import AdminPanel from './components/admin/AdminPanel';
 import { cafesApi, metricsApi } from './lib/api';
-import { Spinner, Card, Button, Badge } from './components/shared';
+import { Spinner, Card, Button, Badge, ThemeToggle } from './components/shared';
+import { getPreferredTheme, persistTheme } from './lib/theme';
 
 const clerkEnabled = Boolean(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const SELECTED_CAFE_STORAGE_KEY = 'menu.selectedCafeId';
@@ -29,7 +30,7 @@ function storeCafeId(cafeId) {
   }
 }
 
-function Nav({ cafe, authEnabled }) {
+function Nav({ cafe, authEnabled, theme, onThemeChange }) {
   const links = [
     { to: '/dashboard', label: 'Dashboard' },
     { to: '/kitchen', label: 'Kitchen' },
@@ -81,6 +82,8 @@ function Nav({ cafe, authEnabled }) {
                 </NavLink>
               ))}
             </div>
+
+            <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
 
             {authEnabled ? (
               <div className="inline-flex items-center justify-center rounded-full border border-white/80 bg-white/75 p-1.5 shadow-sm">
@@ -142,10 +145,10 @@ function NoCafeState() {
   );
 }
 
-function AppShell({ cafe, authEnabled, onCafeChange }) {
+function AppShell({ cafe, authEnabled, onCafeChange, theme, onThemeChange }) {
   return (
     <>
-      <Nav cafe={cafe} authEnabled={authEnabled} />
+      <Nav cafe={cafe} authEnabled={authEnabled} theme={theme} onThemeChange={onThemeChange} />
       <main className="min-h-screen pb-12">
         <Routes>
           <Route path="/" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
@@ -165,7 +168,7 @@ function AppShell({ cafe, authEnabled, onCafeChange }) {
   );
 }
 
-function AppContent({ authEnabled }) {
+function AppContent({ authEnabled, theme, onThemeChange }) {
   const [cafe, setCafe] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -254,15 +257,25 @@ function AppContent({ authEnabled }) {
 
   return (
     <Router>
-      <AppShell cafe={cafe} authEnabled={authEnabled} onCafeChange={handleCafeChange} />
+      <AppShell
+        cafe={cafe}
+        authEnabled={authEnabled}
+        onCafeChange={handleCafeChange}
+        theme={theme}
+        onThemeChange={onThemeChange}
+      />
     </Router>
   );
 }
 
-function LoginPage() {
+function LoginPage({ theme, onThemeChange }) {
   return (
     <div className="min-h-screen px-4 py-8 md:px-6">
-      <div className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl items-center gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="mx-auto mb-4 flex max-w-6xl justify-end">
+        <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
+      </div>
+
+      <div className="mx-auto grid min-h-[calc(100vh-8rem)] max-w-6xl items-center gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <Card tone="dark" className="menu-hero-card p-8 md:p-12">
           <span className="menu-eyebrow border-white/10 bg-white/10 text-white/70">Operations suite</span>
           <h1 className="mt-6 max-w-xl font-display text-4xl font-semibold tracking-tight text-white md:text-[3.4rem]">
@@ -304,17 +317,23 @@ function LoginPage() {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(getPreferredTheme);
+
+  useEffect(() => {
+    persistTheme(theme);
+  }, [theme]);
+
   if (!clerkEnabled) {
-    return <AppContent authEnabled={false} />;
+    return <AppContent authEnabled={false} theme={theme} onThemeChange={setTheme} />;
   }
 
   return (
     <>
       <SignedOut>
-        <LoginPage />
+        <LoginPage theme={theme} onThemeChange={setTheme} />
       </SignedOut>
       <SignedIn>
-        <AppContent authEnabled />
+        <AppContent authEnabled theme={theme} onThemeChange={setTheme} />
       </SignedIn>
     </>
   );

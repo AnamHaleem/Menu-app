@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import OwnerDashboard from '../dashboard/OwnerDashboard';
 import KitchenView from '../kitchen/KitchenView';
-import { Button, Card, Spinner, Badge } from '../shared';
+import { Button, Card, Spinner, Badge, ThemeToggle } from '../shared';
 import { ownerAuthApi, ownerPortalApi } from '../../lib/api';
+import { getPreferredTheme, persistTheme } from '../../lib/theme';
 
 const OWNER_SELECTED_CAFE_KEY = 'menu.ownerSelectedCafeId';
 const CANADIAN_PROVINCES = [
@@ -74,6 +75,7 @@ function storeOwnerSelectedCafeId(cafeId) {
 export default function OwnerPortal() {
   const [loading, setLoading] = useState(true);
   const [owner, setOwner] = useState(null);
+  const [theme, setTheme] = useState(getPreferredTheme);
   const [signInForm, setSignInForm] = useState({
     email: '',
     first_name: '',
@@ -96,6 +98,10 @@ export default function OwnerPortal() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [selectedCafeId, setSelectedCafeId] = useState(readOwnerSelectedCafeId());
+
+  useEffect(() => {
+    persistTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -288,6 +294,10 @@ export default function OwnerPortal() {
   if (!owner) {
     return (
       <div className="app-page">
+        <div className="mb-5 flex justify-end">
+          <ThemeToggle theme={theme} onThemeChange={setTheme} />
+        </div>
+
         <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
           <Card tone="dark" className="menu-hero-card p-8 md:p-10">
             <span className="menu-eyebrow border-white/10 bg-white/10 text-white/70">Owner portal</span>
@@ -488,6 +498,10 @@ export default function OwnerPortal() {
   if (!selectedCafe) {
     return (
       <div className="app-page">
+        <div className="mb-5 flex justify-end">
+          <ThemeToggle theme={theme} onThemeChange={setTheme} />
+        </div>
+
         <Card className="menu-hero-card mx-auto max-w-xl p-8 text-center">
           <span className="menu-eyebrow">Owner workspace</span>
           <h2 className="mt-5 font-display text-3xl font-semibold tracking-tight text-ink-950">No active cafes found</h2>
@@ -550,6 +564,8 @@ export default function OwnerPortal() {
                 Kitchen
               </NavLink>
             </div>
+
+            <ThemeToggle theme={theme} onThemeChange={setTheme} />
 
             <Button
               size="sm"
