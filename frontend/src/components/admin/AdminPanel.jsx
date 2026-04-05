@@ -597,7 +597,7 @@ function CafeDetail({ cafe, onCafeDeleted, onCafeUpdated }) {
 
   return (
     <div className="space-y-6">
-      <Card className="menu-hero-card border-transparent bg-ink-950 p-6 text-white shadow-float md:p-7">
+      <Card tone="dark" className="menu-hero-card p-6 md:p-7">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <span className="inline-flex items-center rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/70">

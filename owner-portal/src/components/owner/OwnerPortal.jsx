@@ -289,7 +289,7 @@ export default function OwnerPortal() {
     return (
       <div className="app-page">
         <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-          <Card className="menu-hero-card border-transparent bg-ink-950 p-8 text-white shadow-float md:p-10">
+          <Card tone="dark" className="menu-hero-card p-8 md:p-10">
             <span className="menu-eyebrow border-white/10 bg-white/10 text-white/70">Owner portal</span>
             <h2 className="mt-6 font-display text-4xl font-semibold tracking-tight text-white md:text-[3.2rem]">
               Run your cafes with less noise and more signal.
@@ -459,21 +459,22 @@ export default function OwnerPortal() {
           )}
           {info && <p className="mt-4 text-sm text-teal-700">{info}</p>}
 
-          <div className="mt-5 flex flex-wrap gap-3">
+          <div className="mt-6 flex flex-wrap gap-4 rounded-[24px] bg-ink-100/45 p-2">
             {codeSent ? (
               <>
                 <Button
+                  size="lg"
                   onClick={handleVerifyCode}
                   disabled={busy || emailCode.length !== 6 || (requiresPhoneCode && phoneCode.length !== 6)}
                 >
                   {busy ? 'Verifying...' : 'Verify & sign in'}
                 </Button>
-                <Button variant="secondary" onClick={handleRequestCode} disabled={busy || !String(signInForm.email || '').trim()}>
+                <Button size="lg" variant="secondary" onClick={handleRequestCode} disabled={busy || !String(signInForm.email || '').trim()}>
                   {busy ? 'Sending...' : 'Resend code'}
                 </Button>
               </>
             ) : (
-              <Button onClick={handleRequestCode} disabled={busy || !String(signInForm.email || '').trim()}>
+              <Button size="lg" onClick={handleRequestCode} disabled={busy || !String(signInForm.email || '').trim()}>
                 {busy ? 'Sending...' : 'Send code'}
               </Button>
             )}
@@ -503,7 +504,7 @@ export default function OwnerPortal() {
 
   return (
     <div className="app-page">
-      <Card className="menu-hero-card mb-6 border-transparent bg-ink-950 p-6 text-white shadow-float md:p-7">
+      <Card tone="dark" className="menu-hero-card mb-6 p-6 md:p-7">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <span className="inline-flex items-center rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/70">

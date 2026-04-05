@@ -232,7 +232,7 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
 
   return (
     <div className="app-page">
-      <Card className="menu-hero-card border-transparent bg-ink-950 p-7 text-white shadow-float md:p-8">
+      <Card tone="dark" className="menu-hero-card p-7 md:p-8">
         <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -265,9 +265,10 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
             )}
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-4 rounded-[24px] bg-white/5 p-2">
             <Button
               variant="secondary"
+              size="lg"
               className="border-white/10 bg-white/10 text-white shadow-none hover:bg-white/20 hover:text-white"
               onClick={handleGenerate}
               disabled={generating}

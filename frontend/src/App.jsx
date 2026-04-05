@@ -111,7 +111,7 @@ function NoCafeState() {
             <p className="mt-4 max-w-lg text-base leading-7 text-ink-500">
               The admin workspace is ready. Once a cafe is added, Menu can begin routing forecasting, kitchen prep, and owner reporting through the rest of the experience.
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div className="mt-8 flex flex-wrap gap-4 rounded-[24px] bg-white/65 p-2">
               <Button onClick={() => { window.location.hash = '/admin'; }} size="lg">
                 Open Admin Setup
               </Button>
@@ -263,7 +263,7 @@ function LoginPage() {
   return (
     <div className="min-h-screen px-4 py-8 md:px-6">
       <div className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl items-center gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <Card className="menu-hero-card border-transparent bg-ink-950 p-8 text-white shadow-float md:p-12">
+        <Card tone="dark" className="menu-hero-card p-8 md:p-12">
           <span className="menu-eyebrow border-white/10 bg-white/10 text-white/70">Operations suite</span>
           <h1 className="mt-6 max-w-xl font-display text-4xl font-semibold tracking-tight text-white md:text-[3.4rem]">
             A calmer daily operating system for modern cafes.

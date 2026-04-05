@@ -193,7 +193,7 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
   return (
     <div className="app-page">
       <div className="mb-6 grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
-        <Card className="menu-hero-card border-transparent bg-ink-950 p-8 text-white shadow-float">
+        <Card tone="dark" className="menu-hero-card p-8">
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/70">
               Operations cockpit
@@ -236,11 +236,11 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
             Send the prep brief to the kitchen, then log real results so the forecast loop gets sharper over time.
           </p>
 
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Button onClick={handleSendPrepList} disabled={sending}>
+          <div className="mt-7 flex flex-wrap gap-4 rounded-[24px] bg-ink-100/50 p-2">
+            <Button onClick={handleSendPrepList} disabled={sending} size="lg">
               {sending ? 'Sending...' : 'Send prep list'}
             </Button>
-            <Button variant="secondary" onClick={() => setShowLogForm((current) => !current)}>
+            <Button variant="secondary" onClick={() => setShowLogForm((current) => !current)} size="lg">
               {showLogForm ? 'Hide log form' : 'Log today'}
             </Button>
           </div>
@@ -285,9 +285,9 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
               </div>
             ))}
           </div>
-          <div className="mt-5 flex flex-wrap gap-3">
-            <Button onClick={handleLogSubmit}>Save today&apos;s numbers</Button>
-            <Button variant="ghost" onClick={() => setShowLogForm(false)}>Cancel</Button>
+          <div className="mt-6 flex flex-wrap gap-4 rounded-[24px] bg-ink-100/45 p-2">
+            <Button onClick={handleLogSubmit} size="lg">Save today&apos;s numbers</Button>
+            <Button variant="ghost" onClick={() => setShowLogForm(false)} size="lg">Cancel</Button>
           </div>
         </Card>
       )}

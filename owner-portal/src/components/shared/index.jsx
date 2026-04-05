@@ -85,7 +85,7 @@ export function Button({
   type = 'button'
 }) {
   const base =
-    'inline-flex items-center justify-center gap-2 rounded-full border font-semibold transition duration-200 focus:outline-none focus:ring-4 focus:ring-navy-100 disabled:pointer-events-none disabled:opacity-45';
+    'inline-flex items-center justify-center gap-2 rounded-full border font-semibold leading-none transition duration-200 focus:outline-none focus:ring-4 focus:ring-navy-100 disabled:pointer-events-none disabled:opacity-45';
   const variants = {
     primary: 'border-transparent bg-ink-950 text-white shadow-lg shadow-slate-900/15 hover:-translate-y-0.5 hover:bg-navy-900',
     secondary: 'border-white/80 bg-white/75 text-ink-700 shadow-soft hover:-translate-y-0.5 hover:border-white hover:bg-white',
@@ -93,9 +93,9 @@ export function Button({
     ghost: 'border-transparent bg-transparent text-ink-500 hover:bg-white/75 hover:text-ink-900'
   };
   const sizes = {
-    sm: 'px-3.5 py-2 text-xs',
-    md: 'px-4.5 py-2.5 text-sm',
-    lg: 'px-6 py-3 text-base'
+    sm: 'px-4.5 py-2.5 text-xs',
+    md: 'px-6 py-3 text-sm',
+    lg: 'px-7 py-4 text-base'
   };
 
   return (
@@ -110,11 +110,17 @@ export function Button({
   );
 }
 
-export function Card({ children, className = '' }) {
+export function Card({ children, className = '', tone = 'default' }) {
+  const tones = {
+    default: 'border-white/75 bg-white/75 shadow-soft',
+    dark: 'border-white/10 bg-gradient-to-br from-ink-950 via-navy-900 to-ink-950 text-white shadow-float'
+  };
+
   return (
     <div
       className={cx(
-        'relative overflow-hidden rounded-[30px] border border-white/75 bg-white/75 shadow-soft backdrop-blur-xl',
+        'relative overflow-hidden rounded-[30px] border backdrop-blur-xl',
+        tones[tone] || tones.default,
         className
       )}
     >
