@@ -23,12 +23,21 @@ const CANADIAN_PROVINCES = [
 ];
 
 function formatCanadianPhoneInput(value) {
+  return String(value || '')
+    .replace(/[^\d+\-\s()]/g, '')
+    .slice(0, 24);
+}
+
+function normalizeCanadianPhoneOnBlur(value) {
   const digits = String(value || '').replace(/\D/g, '');
-  const ten = (digits.startsWith('1') && digits.length > 10) ? digits.slice(1, 11) : digits.slice(0, 10);
-  if (!ten.length) return '';
-  if (ten.length <= 3) return `+1 ${ten}`;
-  if (ten.length <= 6) return `+1 ${ten.slice(0, 3)}-${ten.slice(3)}`;
-  return `+1 ${ten.slice(0, 3)}-${ten.slice(3, 6)}-${ten.slice(6)}`;
+  if (!digits) return '';
+
+  const tenDigits = digits.length === 11 && digits.startsWith('1')
+    ? digits.slice(1)
+    : digits.slice(0, 10);
+
+  if (tenDigits.length !== 10) return String(value || '').trim();
+  return `+1 ${tenDigits.slice(0, 3)}-${tenDigits.slice(3, 6)}-${tenDigits.slice(6)}`;
 }
 
 function normalizePostalInput(value) {
@@ -77,6 +86,8 @@ export default function OwnerPortal() {
   const [emailCode, setEmailCode] = useState('');
   const [phoneCode, setPhoneCode] = useState('');
   const [requiresPhoneCode, setRequiresPhoneCode] = useState(false);
+  const [needsProfile, setNeedsProfile] = useState(false);
+  const [missingProfileFields, setMissingProfileFields] = useState([]);
   const [codeSent, setCodeSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -160,20 +171,32 @@ export default function OwnerPortal() {
   ];
 
   const handleRequestCode = async () => {
-    const missing = requiredFormFields.filter((key) => !String(signInForm[key] || '').trim());
-    if (missing.length) {
-      setError('Please complete all required fields before requesting sign-in codes.');
-      setInfo('');
+    if (!String(signInForm.email || '').trim()) {
+      setError('Email is required.');
       return;
+    }
+
+    if (needsProfile) {
+      const missing = requiredFormFields.filter((key) => !String(signInForm[key] || '').trim());
+      if (missing.length) {
+        setError('Please complete all required profile fields before requesting sign-in codes.');
+        setInfo('');
+        setMissingProfileFields(missing);
+        return;
+      }
     }
 
     setBusy(true);
     setError('');
     setInfo('');
     try {
-      const result = await ownerAuthApi.requestCode(signInForm);
+      const payload = needsProfile
+        ? signInForm
+        : { email: signInForm.email.trim() };
+      const result = await ownerAuthApi.requestCode(payload);
       setCodeSent(true);
       setRequiresPhoneCode(Boolean(result?.requiresPhoneCode));
+      setMissingProfileFields([]);
       setInfo(
         result?.message ||
         (result?.requiresPhoneCode
@@ -181,8 +204,15 @@ export default function OwnerPortal() {
           : 'Verification code sent to your email.')
       );
     } catch (err) {
-      const apiMessage = err?.response?.data?.error;
-      setError(apiMessage || 'Could not send code. Please try again.');
+      const missingFields = err?.response?.data?.missingFields;
+      if (Array.isArray(missingFields) && missingFields.length) {
+        setNeedsProfile(true);
+        setMissingProfileFields(missingFields);
+        setError('First-time setup: complete your profile to continue.');
+      } else {
+        const apiMessage = err?.response?.data?.error;
+        setError(apiMessage || 'Could not send code. Please try again.');
+      }
     } finally {
       setBusy(false);
     }
@@ -204,6 +234,8 @@ export default function OwnerPortal() {
       setPhoneCode('');
       setCodeSent(false);
       setRequiresPhoneCode(false);
+      setNeedsProfile(false);
+      setMissingProfileFields([]);
       setInfo('');
     } catch (err) {
       const apiMessage = err?.response?.data?.error;
@@ -231,6 +263,8 @@ export default function OwnerPortal() {
     setEmailCode('');
     setPhoneCode('');
     setRequiresPhoneCode(false);
+    setNeedsProfile(false);
+    setMissingProfileFields([]);
     setCodeSent(false);
     setSelectedCafeId(null);
     storeOwnerSelectedCafeId(null);
@@ -250,10 +284,23 @@ export default function OwnerPortal() {
         <Card className="p-7">
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Cafe owner sign-in</h2>
           <p className="text-sm text-gray-500 mb-5">
-            Complete your profile and receive secure sign-in codes by email and SMS.
+            Enter your email to continue. First-time owners will complete profile setup once.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div className="md:col-span-2">
+              <label className="block text-xs text-gray-400 mb-1">Email *</label>
+              <input
+                type="email"
+                value={signInForm.email}
+                onChange={(event) => handleFormChange('email', event.target.value)}
+                placeholder="you@yourcafe.com"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+              />
+            </div>
+
+            {needsProfile && (
+              <>
             <div>
               <label className="block text-xs text-gray-400 mb-1">Owner first name *</label>
               <input
@@ -272,21 +319,12 @@ export default function OwnerPortal() {
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
               />
             </div>
-            <div className="md:col-span-2">
-              <label className="block text-xs text-gray-400 mb-1">Email *</label>
-              <input
-                type="email"
-                value={signInForm.email}
-                onChange={(event) => handleFormChange('email', event.target.value)}
-                placeholder="you@yourcafe.com"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
-              />
-            </div>
             <div>
               <label className="block text-xs text-gray-400 mb-1">Primary phone *</label>
               <input
                 value={signInForm.phone}
                 onChange={(event) => handleFormChange('phone', event.target.value)}
+                onBlur={() => handleFormChange('phone', normalizeCanadianPhoneOnBlur(signInForm.phone))}
                 placeholder="+1 000-000-0000"
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
               />
@@ -296,6 +334,7 @@ export default function OwnerPortal() {
               <input
                 value={signInForm.secondary_phone}
                 onChange={(event) => handleFormChange('secondary_phone', event.target.value)}
+                onBlur={() => handleFormChange('secondary_phone', normalizeCanadianPhoneOnBlur(signInForm.secondary_phone))}
                 placeholder="+1 000-000-0000"
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
               />
@@ -351,6 +390,8 @@ export default function OwnerPortal() {
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
               />
             </div>
+              </>
+            )}
           </div>
 
           {codeSent && (
@@ -379,6 +420,11 @@ export default function OwnerPortal() {
           )}
 
           {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
+          {needsProfile && missingProfileFields.length > 0 && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+              Missing: {missingProfileFields.join(', ')}
+            </p>
+          )}
           {info && <p className="text-sm text-teal-700 mb-3">{info}</p>}
 
           <div className="flex flex-wrap gap-2">
