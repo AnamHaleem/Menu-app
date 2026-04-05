@@ -36,6 +36,38 @@ function ComparisonMetricCard({ label, value, delta, sub, positiveIsGood = true 
   );
 }
 
+function AccordionSection({ title, summary = '', defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <Card className="mb-4 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full px-4 py-4 flex items-center justify-between gap-3 text-left"
+      >
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900">{title}</p>
+          {summary && <p className="text-xs text-gray-500 mt-1 truncate">{summary}</p>}
+        </div>
+        <span className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500">
+          <svg
+            className={`w-4 h-4 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </span>
+      </button>
+
+      {open && <div className="px-4 pb-4 border-t border-gray-100">{children}</div>}
+    </Card>
+  );
+}
+
 export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
   const prepClient = dataApi?.prepList || prepListApi;
   const prepSummaryClient = dataApi?.prepSummary || prepSummaryApi;
@@ -285,6 +317,14 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
   const analyticsComparison = prepAnalytics?.comparison || null;
   const analyticsStationRows = prepAnalytics?.stationBreakdown || [];
   const analyticsVarianceRows = prepAnalytics?.topVarianceRows || [];
+  const progressSummary = totalItems > 0
+    ? `${completedItems}/${totalItems} done · ${pct}% complete · ${summaryTotals.withActuals || 0}/${summaryTotals.itemCount || totalItems} actuals captured`
+    : 'No prep rows yet for today.';
+  const analyticsSummary = analyticsLoading
+    ? 'Loading analytics...'
+    : analyticsOverview
+      ? `${prepAnalytics?.range?.label || 'Selected range'} · ${analyticsOverview.prepDays} prep day(s) · ${analyticsOverview.itemCount} total rows`
+      : 'No historical prep analytics available yet.';
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 md:p-6 max-w-3xl mx-auto">
@@ -334,187 +374,6 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
           </div>
         )}
       </div>
-
-      <Card className="p-4 mb-6">
-        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
-          <div>
-            <p className="text-sm font-semibold text-gray-900">Prep analytics</p>
-            <p className="text-xs text-gray-500">
-              Review execution quality across a selected window without changing today&apos;s live prep list.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={downloadAnalyticsCsv}
-            disabled={exportingCsv || !prepAnalytics?.rows?.length}
-          >
-            {exportingCsv ? 'Exporting...' : 'Export CSV'}
-          </Button>
-        </div>
-
-        <DateRangePicker
-          value={analyticsRange}
-          onChange={setAnalyticsRange}
-          includeAllTime={false}
-          className="mb-4 border-0 shadow-none bg-gray-50"
-        />
-
-        {analyticsLoading ? (
-          <Spinner />
-        ) : analyticsError ? (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
-            {analyticsError}
-          </div>
-        ) : analyticsOverview ? (
-          <>
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4">
-              <p className="text-xs text-gray-500">
-                Window: <strong className="text-gray-700">{prepAnalytics?.range?.label}</strong>
-              </p>
-              <p className="text-xs text-gray-500">
-                Compared with: <strong className="text-gray-700">{prepAnalytics?.previousRange?.label || 'Previous period unavailable'}</strong>
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-              <ComparisonMetricCard
-                label="Completion rate"
-                value={`${Math.round(analyticsOverview.completionRate || 0)}%`}
-                delta={analyticsComparison?.completionRateDelta || 0}
-                sub={`${analyticsOverview.completedCount}/${analyticsOverview.itemCount} lines checked`}
-              />
-              <ComparisonMetricCard
-                label="Actual capture"
-                value={`${Math.round(analyticsOverview.actualCaptureRate || 0)}%`}
-                delta={analyticsComparison?.actualCaptureRateDelta || 0}
-                sub={`${analyticsOverview.actualCaptureCount}/${analyticsOverview.itemCount} lines with actuals`}
-              />
-              <ComparisonMetricCard
-                label="On-target rate"
-                value={`${Math.round(analyticsOverview.onTargetRate || 0)}%`}
-                delta={analyticsComparison?.onTargetRateDelta || 0}
-                sub={`${analyticsOverview.onTargetCount} lines on target`}
-              />
-              <ComparisonMetricCard
-                label="Prep days"
-                value={analyticsOverview.prepDays}
-                delta={analyticsComparison?.prepDaysDelta || 0}
-                sub="days with prep rows in range"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-              <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                <p className="text-[11px] uppercase tracking-wide text-gray-400">Over prepped</p>
-                <p className="text-xl font-semibold text-amber-600">{analyticsOverview.overPreppedCount}</p>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                <p className="text-[11px] uppercase tracking-wide text-gray-400">Under prepped</p>
-                <p className="text-xl font-semibold text-red-600">{analyticsOverview.underPreppedCount}</p>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                <p className="text-[11px] uppercase tracking-wide text-gray-400">Total net prep</p>
-                <p className="text-xl font-semibold text-gray-900">{formatQty(analyticsOverview.totalNetQty)}</p>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                <p className="text-[11px] uppercase tracking-wide text-gray-400">Avg absolute variance</p>
-                <p className="text-xl font-semibold text-gray-900">{formatQty(analyticsOverview.avgAbsoluteVarianceQty)}</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="border border-gray-100 rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
-                  <p className="text-sm font-semibold text-gray-900">Station performance</p>
-                  <p className="text-xs text-gray-500">Completion and actual capture by station.</p>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-100">
-                        {['Station', 'Completion', 'Actual capture', 'On target'].map((heading) => (
-                          <th key={heading} className="text-left text-xs text-gray-400 font-medium px-3 py-2">{heading}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {analyticsStationRows.map((row) => (
-                        <tr key={row.station} className="border-b border-gray-50">
-                          <td className="px-3 py-2 text-gray-800 font-medium">{row.station}</td>
-                          <td className="px-3 py-2 text-gray-700">{Math.round(row.completionRate)}%</td>
-                          <td className="px-3 py-2 text-gray-700">{Math.round(row.actualCaptureRate)}%</td>
-                          <td className="px-3 py-2 text-gray-700">{Math.round(row.onTargetRate)}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="border border-gray-100 rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
-                  <p className="text-sm font-semibold text-gray-900">Top variance rows</p>
-                  <p className="text-xs text-gray-500">Largest misses in the selected date window.</p>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-100">
-                        {['Date', 'Ingredient', 'Net', 'Actual', 'Variance'].map((heading) => (
-                          <th key={heading} className="text-left text-xs text-gray-400 font-medium px-3 py-2">{heading}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {analyticsVarianceRows.length > 0 ? analyticsVarianceRows.map((row) => {
-                        const variance = Number(row.varianceQty || 0);
-                        const varianceClass = variance > 0.05 ? 'text-amber-700' : variance < -0.05 ? 'text-red-600' : 'text-teal-600';
-                        const variancePrefix = variance > 0 ? '+' : '';
-
-                        return (
-                          <tr key={`${row.date}-${row.station}-${row.ingredientName}`} className="border-b border-gray-50">
-                            <td className="px-3 py-2 text-gray-500">{row.date}</td>
-                            <td className="px-3 py-2 text-gray-800 font-medium">{row.ingredientName}</td>
-                            <td className="px-3 py-2 text-gray-700">{formatQty(row.netQty)} {row.unit}</td>
-                            <td className="px-3 py-2 text-gray-700">{formatQty(row.actualQty)} {row.unit}</td>
-                            <td className={`px-3 py-2 font-semibold ${varianceClass}`}>{variancePrefix}{formatQty(variance)} {row.unit}</td>
-                          </tr>
-                        );
-                      }) : (
-                        <tr>
-                          <td className="px-3 py-4 text-sm text-gray-400" colSpan={5}>No actual prep has been captured in this range yet.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </>
-        ) : (
-          <p className="text-sm text-gray-400">No historical prep analytics available yet for this date range.</p>
-        )}
-      </Card>
-
-      {/* Progress bar */}
-      {totalItems > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-gray-500">{completedItems} of {totalItems} items done</span>
-            <span className={`text-sm font-semibold ${allDone ? 'text-teal-600' : 'text-gray-700'}`}>{pct}%</span>
-          </div>
-          <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${allDone ? 'bg-teal-500' : 'bg-navy-900'}`}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-          {allDone && (
-            <p className="text-center text-sm text-teal-600 font-medium mt-3">All prepped — great work!</p>
-          )}
-        </div>
-      )}
 
       {/* No prep list yet */}
       {prepList.length === 0 && (
@@ -703,6 +562,257 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
           )}
         </div>
       )}
+
+      {prepList.length > 0 && (
+        <AccordionSection title="Today’s progress and variance" summary={progressSummary}>
+          <div className="pt-4">
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-500">{completedItems} of {totalItems} items done</span>
+                <span className={`text-sm font-semibold ${allDone ? 'text-teal-600' : 'text-gray-700'}`}>{pct}%</span>
+              </div>
+              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${allDone ? 'bg-teal-500' : 'bg-navy-900'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              {allDone && (
+                <p className="text-center text-sm text-teal-600 font-medium mt-3">All prepped — great work!</p>
+              )}
+            </div>
+
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">End-of-day variance</p>
+                <p className="text-xs text-gray-500">Compares net need vs actual prep entered by staff.</p>
+              </div>
+              <p className="text-xs text-gray-500">
+                Actuals captured: <strong className="text-gray-700">{summaryTotals.withActuals || 0}/{summaryTotals.itemCount || prepList.length}</strong>
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                <p className="text-[11px] uppercase tracking-wide text-gray-400">On target</p>
+                <p className="text-xl font-semibold text-teal-600">{summaryTotals.onTargetCount || 0}</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                <p className="text-[11px] uppercase tracking-wide text-gray-400">Over prepped</p>
+                <p className="text-xl font-semibold text-amber-600">{summaryTotals.overPreppedCount || 0}</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                <p className="text-[11px] uppercase tracking-wide text-gray-400">Under prepped</p>
+                <p className="text-xl font-semibold text-red-600">{summaryTotals.underPreppedCount || 0}</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                <p className="text-[11px] uppercase tracking-wide text-gray-400">Completed checks</p>
+                <p className="text-xl font-semibold text-navy-900">{summaryTotals.completedCount || 0}/{summaryTotals.itemCount || prepList.length}</p>
+              </div>
+            </div>
+
+            {(summaryTotals.pendingActualCount || 0) > 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+                Enter actual prep for {summaryTotals.pendingActualCount} more item(s) to complete today&apos;s variance view.
+              </p>
+            )}
+
+            {topVarianceRows.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      {['Ingredient', 'Net need', 'Actual', 'Variance'].map((heading) => (
+                        <th key={heading} className="text-left text-xs text-gray-400 font-medium px-2 py-2">{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topVarianceRows.map((row) => {
+                      const variance = Number(row.varianceVsNetQty || 0);
+                      const varianceClass = variance > 0.05 ? 'text-amber-700' : variance < -0.05 ? 'text-red-600' : 'text-teal-600';
+                      const variancePrefix = variance > 0 ? '+' : '';
+
+                      return (
+                        <tr key={`${row.prepId}-${row.ingredientId}`} className="border-b border-gray-50">
+                          <td className="px-2 py-2 text-gray-800 font-medium">{row.ingredientName}</td>
+                          <td className="px-2 py-2 text-gray-600">{formatQty(row.netQty)} {row.unit}</td>
+                          <td className="px-2 py-2 text-gray-700">{formatQty(row.actualPreppedQty)} {row.unit}</td>
+                          <td className={`px-2 py-2 font-semibold ${varianceClass}`}>{variancePrefix}{formatQty(variance)} {row.unit}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </AccordionSection>
+      )}
+
+      <AccordionSection title="Historical prep analytics" summary={analyticsSummary}>
+        <div className="pt-4">
+          <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Prep analytics</p>
+              <p className="text-xs text-gray-500">
+                Review execution quality across a selected window without changing today&apos;s live prep list.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={downloadAnalyticsCsv}
+              disabled={exportingCsv || !prepAnalytics?.rows?.length}
+            >
+              {exportingCsv ? 'Exporting...' : 'Export CSV'}
+            </Button>
+          </div>
+
+          <DateRangePicker
+            value={analyticsRange}
+            onChange={setAnalyticsRange}
+            includeAllTime={false}
+            className="mb-4 border-0 shadow-none bg-gray-50"
+          />
+
+          {analyticsLoading ? (
+            <Spinner />
+          ) : analyticsError ? (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
+              {analyticsError}
+            </div>
+          ) : analyticsOverview ? (
+            <>
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4">
+                <p className="text-xs text-gray-500">
+                  Window: <strong className="text-gray-700">{prepAnalytics?.range?.label}</strong>
+                </p>
+                <p className="text-xs text-gray-500">
+                  Compared with: <strong className="text-gray-700">{prepAnalytics?.previousRange?.label || 'Previous period unavailable'}</strong>
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <ComparisonMetricCard
+                  label="Completion rate"
+                  value={`${Math.round(analyticsOverview.completionRate || 0)}%`}
+                  delta={analyticsComparison?.completionRateDelta || 0}
+                  sub={`${analyticsOverview.completedCount}/${analyticsOverview.itemCount} lines checked`}
+                />
+                <ComparisonMetricCard
+                  label="Actual capture"
+                  value={`${Math.round(analyticsOverview.actualCaptureRate || 0)}%`}
+                  delta={analyticsComparison?.actualCaptureRateDelta || 0}
+                  sub={`${analyticsOverview.actualCaptureCount}/${analyticsOverview.itemCount} lines with actuals`}
+                />
+                <ComparisonMetricCard
+                  label="On-target rate"
+                  value={`${Math.round(analyticsOverview.onTargetRate || 0)}%`}
+                  delta={analyticsComparison?.onTargetRateDelta || 0}
+                  sub={`${analyticsOverview.onTargetCount} lines on target`}
+                />
+                <ComparisonMetricCard
+                  label="Prep days"
+                  value={analyticsOverview.prepDays}
+                  delta={analyticsComparison?.prepDaysDelta || 0}
+                  sub="days with prep rows in range"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-400">Over prepped</p>
+                  <p className="text-xl font-semibold text-amber-600">{analyticsOverview.overPreppedCount}</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-400">Under prepped</p>
+                  <p className="text-xl font-semibold text-red-600">{analyticsOverview.underPreppedCount}</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-400">Total net prep</p>
+                  <p className="text-xl font-semibold text-gray-900">{formatQty(analyticsOverview.totalNetQty)}</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-400">Avg absolute variance</p>
+                  <p className="text-xl font-semibold text-gray-900">{formatQty(analyticsOverview.avgAbsoluteVarianceQty)}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="border border-gray-100 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                    <p className="text-sm font-semibold text-gray-900">Station performance</p>
+                    <p className="text-xs text-gray-500">Completion and actual capture by station.</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          {['Station', 'Completion', 'Actual capture', 'On target'].map((heading) => (
+                            <th key={heading} className="text-left text-xs text-gray-400 font-medium px-3 py-2">{heading}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analyticsStationRows.map((row) => (
+                          <tr key={row.station} className="border-b border-gray-50">
+                            <td className="px-3 py-2 text-gray-800 font-medium">{row.station}</td>
+                            <td className="px-3 py-2 text-gray-700">{Math.round(row.completionRate)}%</td>
+                            <td className="px-3 py-2 text-gray-700">{Math.round(row.actualCaptureRate)}%</td>
+                            <td className="px-3 py-2 text-gray-700">{Math.round(row.onTargetRate)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="border border-gray-100 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                    <p className="text-sm font-semibold text-gray-900">Top variance rows</p>
+                    <p className="text-xs text-gray-500">Largest misses in the selected date window.</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          {['Date', 'Ingredient', 'Net', 'Actual', 'Variance'].map((heading) => (
+                            <th key={heading} className="text-left text-xs text-gray-400 font-medium px-3 py-2">{heading}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analyticsVarianceRows.length > 0 ? analyticsVarianceRows.map((row) => {
+                          const variance = Number(row.varianceQty || 0);
+                          const varianceClass = variance > 0.05 ? 'text-amber-700' : variance < -0.05 ? 'text-red-600' : 'text-teal-600';
+                          const variancePrefix = variance > 0 ? '+' : '';
+
+                          return (
+                            <tr key={`${row.date}-${row.station}-${row.ingredientName}`} className="border-b border-gray-50">
+                              <td className="px-3 py-2 text-gray-500">{row.date}</td>
+                              <td className="px-3 py-2 text-gray-800 font-medium">{row.ingredientName}</td>
+                              <td className="px-3 py-2 text-gray-700">{formatQty(row.netQty)} {row.unit}</td>
+                              <td className="px-3 py-2 text-gray-700">{formatQty(row.actualQty)} {row.unit}</td>
+                              <td className={`px-3 py-2 font-semibold ${varianceClass}`}>{variancePrefix}{formatQty(variance)} {row.unit}</td>
+                            </tr>
+                          );
+                        }) : (
+                          <tr>
+                            <td className="px-3 py-4 text-sm text-gray-400" colSpan={5}>No actual prep has been captured in this range yet.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-gray-400">No historical prep analytics available yet for this date range.</p>
+          )}
+        </div>
+      </AccordionSection>
     </div>
   );
 }
