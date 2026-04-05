@@ -37,6 +37,33 @@ const normalizeIsoDate = (value) => {
   if (Number.isNaN(date.getTime())) return null;
   return raw;
 };
+const normalizeTransactionText = (value, fallback = '') => {
+  const normalized = String(value ?? '').trim();
+  return normalized || fallback;
+};
+const buildTransactionFingerprint = ({
+  cafeId,
+  date,
+  itemName,
+  quantity,
+  revenue,
+  orderType,
+  daypart
+}) =>
+  crypto
+    .createHash('sha256')
+    .update(
+      [
+        String(cafeId),
+        normalizeIsoDate(date) || normalizeTransactionText(date),
+        toKey(itemName),
+        String(parseInt(quantity, 10) || 0),
+        Number(Number(revenue || 0).toFixed(2)).toFixed(2),
+        toKey(orderType),
+        toKey(daypart)
+      ].join('|')
+    )
+    .digest('hex');
 const formatRangeDateLabel = (value) => {
   if (!value) return null;
   const date = new Date(`${value}T12:00:00`);
@@ -3494,18 +3521,129 @@ router.get('/cafes/:cafeId/transactions', async (req, res) => {
 });
 
 router.post('/cafes/:cafeId/transactions/bulk', async (req, res) => {
-  const { transactions } = req.body;
+  const cafeId = parseInt(req.params.cafeId, 10);
+  const transactions = Array.isArray(req.body?.transactions) ? req.body.transactions : null;
+
+  if (Number.isNaN(cafeId)) {
+    return res.status(400).json({ error: 'Invalid cafe ID' });
+  }
+
+  if (!Array.isArray(transactions)) {
+    return res.status(400).json({ error: 'transactions must be an array' });
+  }
+
+  const normalizedTransactions = transactions
+    .map((transaction) => {
+      const date = normalizeIsoDate(transaction?.date);
+      const itemName = normalizeTransactionText(transaction?.item_name);
+      const quantity = parseInt(transaction?.quantity, 10);
+      const revenue = toNumberOrNull(transaction?.revenue) ?? 0;
+      const orderType = normalizeTransactionText(transaction?.order_type, 'Dine-in');
+      const daypart = normalizeTransactionText(transaction?.daypart, 'Morning');
+
+      if (!date || !itemName || !Number.isInteger(quantity) || quantity <= 0) {
+        return null;
+      }
+
+      return {
+        date,
+        itemName,
+        quantity,
+        revenue,
+        orderType,
+        daypart
+      };
+    })
+    .filter(Boolean);
+
+  if (!normalizedTransactions.length) {
+    return res.status(201).json({
+      imported: 0,
+      duplicatesSkipped: 0,
+      invalidSkipped: transactions.length
+    });
+  }
+
+  const dates = normalizedTransactions.map((row) => row.date).sort();
+  const minDate = dates[0];
+  const maxDate = dates[dates.length - 1];
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    for (const t of transactions) {
+
+    const [existingTransactionsResult, itemsResult] = await Promise.all([
+      client.query(
+        `
+          SELECT item_name, date::text AS date, quantity, revenue, order_type, daypart
+          FROM transactions
+          WHERE cafe_id = $1
+            AND date >= $2::date
+            AND date <= $3::date
+        `,
+        [cafeId, minDate, maxDate]
+      ),
+      client.query('SELECT id, name FROM items WHERE cafe_id = $1', [cafeId])
+    ]);
+
+    const seenFingerprints = new Set(
+      existingTransactionsResult.rows.map((row) =>
+        buildTransactionFingerprint({
+          cafeId,
+          date: row.date,
+          itemName: row.item_name,
+          quantity: row.quantity,
+          revenue: row.revenue,
+          orderType: row.order_type || 'Dine-in',
+          daypart: row.daypart || 'Morning'
+        })
+      )
+    );
+    const itemIdByKey = new Map(itemsResult.rows.map((row) => [toKey(row.name), row.id]));
+
+    let imported = 0;
+    let duplicatesSkipped = 0;
+
+    for (const t of normalizedTransactions) {
+      const sourceFingerprint = buildTransactionFingerprint({
+        cafeId,
+        date: t.date,
+        itemName: t.itemName,
+        quantity: t.quantity,
+        revenue: t.revenue,
+        orderType: t.orderType,
+        daypart: t.daypart
+      });
+
+      if (seenFingerprints.has(sourceFingerprint)) {
+        duplicatesSkipped += 1;
+        continue;
+      }
+
+      seenFingerprints.add(sourceFingerprint);
+
       await client.query(`
-        INSERT INTO transactions (cafe_id, item_name, date, quantity, revenue, order_type, daypart)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
-      `, [req.params.cafeId, t.item_name, t.date, t.quantity, t.revenue || 0, t.order_type || 'Dine-in', t.daypart || 'Morning']);
+        INSERT INTO transactions (cafe_id, item_id, item_name, date, quantity, revenue, order_type, daypart, source_fingerprint)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        ON CONFLICT (cafe_id, source_fingerprint) DO NOTHING
+      `, [
+        cafeId,
+        itemIdByKey.get(toKey(t.itemName)) || null,
+        t.itemName,
+        t.date,
+        t.quantity,
+        t.revenue,
+        t.orderType,
+        t.daypart,
+        sourceFingerprint
+      ]);
+      imported += 1;
     }
     await client.query('COMMIT');
-    res.status(201).json({ imported: transactions.length });
+    res.status(201).json({
+      imported,
+      duplicatesSkipped,
+      invalidSkipped: transactions.length - normalizedTransactions.length
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     res.status(500).json({ error: err.message });

@@ -308,6 +308,16 @@ const migrate = async () => {
     `);
 
     await client.query(`
+      ALTER TABLE transactions
+      ADD COLUMN IF NOT EXISTS source_fingerprint VARCHAR(64);
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_cafe_fingerprint_unique
+      ON transactions (cafe_id, source_fingerprint);
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS prep_lists (
         id SERIAL PRIMARY KEY,
         cafe_id INTEGER REFERENCES cafes(id) ON DELETE CASCADE,
