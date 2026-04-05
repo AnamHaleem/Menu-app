@@ -82,6 +82,7 @@ async function upsertModelVersion(input = {}, client = pool) {
   const trainedRangeStart = normalizeIsoDate(input.trainedRangeStart || input.trained_range_start);
   const trainedRangeEnd = normalizeIsoDate(input.trainedRangeEnd || input.trained_range_end);
   const trainingRows = Math.max(0, Number(input.trainingRows || input.training_rows || 0) || 0);
+  const activatedAt = status === 'active' ? new Date().toISOString() : null;
 
   const result = await client.query(
     `
@@ -99,7 +100,7 @@ async function upsertModelVersion(input = {}, client = pool) {
         created_at,
         activated_at
       )
-      VALUES ($1::text, $2::text, $3::text, $4::text, $5::jsonb, $6::jsonb, $7::text, $8::date, $9::date, $10::int, NOW(), CASE WHEN $4::text = 'active' THEN NOW() ELSE NULL END)
+      VALUES ($1::text, $2::text, $3::text, $4::text, $5::jsonb, $6::jsonb, $7::text, $8::date, $9::date, $10::int, NOW(), $11::timestamp)
       ON CONFLICT (model_key)
       DO UPDATE SET
         display_name = EXCLUDED.display_name,
@@ -127,7 +128,8 @@ async function upsertModelVersion(input = {}, client = pool) {
       notes,
       trainedRangeStart,
       trainedRangeEnd,
-      trainingRows
+      trainingRows,
+      activatedAt
     ]
   );
 
