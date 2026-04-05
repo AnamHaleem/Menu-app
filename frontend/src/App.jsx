@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { HashRouter as Router, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { SignIn, SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import OwnerDashboard from './components/dashboard/OwnerDashboard';
 import KitchenView from './components/kitchen/KitchenView';
@@ -9,6 +9,7 @@ import { Spinner, Card, Button } from './components/shared';
 
 const clerkEnabled = Boolean(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const SELECTED_CAFE_STORAGE_KEY = 'menu.selectedCafeId';
+const ADMIN_SIDEBAR_STORAGE_KEY = 'menu.adminSidebarCollapsed';
 
 function getStoredCafeId() {
   try {
@@ -29,57 +30,185 @@ function storeCafeId(cafeId) {
   }
 }
 
-function Nav({ cafe, authEnabled }) {
-  const links = [
-    { to: '/dashboard', label: 'Dashboard' },
-    { to: '/kitchen', label: 'Kitchen' },
-    { to: '/admin', label: 'Admin' }
+function readSidebarState() {
+  try {
+    return window.localStorage.getItem(ADMIN_SIDEBAR_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function storeSidebarState(collapsed) {
+  try {
+    window.localStorage.setItem(ADMIN_SIDEBAR_STORAGE_KEY, collapsed ? '1' : '0');
+  } catch {
+    // ignore storage issues
+  }
+}
+
+function BrandMark() {
+  return (
+    <div className="w-12 h-12 rounded-[18px] bg-[#111111] text-white flex items-center justify-center text-xl font-bold shadow-sm">
+      M
+    </div>
+  );
+}
+
+function DashboardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-4 h-4">
+      <rect x="4" y="4" width="6" height="6" rx="1.5" />
+      <rect x="14" y="4" width="6" height="6" rx="1.5" />
+      <rect x="4" y="14" width="6" height="6" rx="1.5" />
+      <rect x="14" y="14" width="6" height="6" rx="1.5" />
+    </svg>
+  );
+}
+
+function PrepIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-4 h-4">
+      <path d="M8 6h11" />
+      <path d="M8 12h11" />
+      <path d="M8 18h11" />
+      <path d="M4 6h.01" strokeLinecap="round" />
+      <path d="M4 12h.01" strokeLinecap="round" />
+      <path d="M4 18h.01" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AdminIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-4 h-4">
+      <path d="M12 3l7 4v5c0 5-3.5 7.5-7 9-3.5-1.5-7-4-7-9V7l7-4Z" />
+      <path d="M12 9v6" />
+      <path d="M9 12h6" />
+    </svg>
+  );
+}
+
+function ShellNavLink({ to, label, icon: Icon, collapsed }) {
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) => [
+        'group flex items-center gap-3 rounded-[20px] px-3 py-3 transition-all duration-200',
+        collapsed ? 'lg:justify-center lg:px-0' : '',
+        isActive
+          ? 'bg-slate-100 text-slate-950 shadow-[inset_0_0_0_1px_rgba(226,232,240,0.9)]'
+          : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+      ].join(' ')}
+    >
+      {({ isActive }) => (
+        <>
+          <span className={[
+            'flex h-10 w-10 items-center justify-center rounded-2xl border transition-colors duration-200',
+            isActive ? 'border-blue-100 bg-blue-50 text-blue-600' : 'border-slate-200 bg-white text-slate-400 group-hover:text-slate-700'
+          ].join(' ')}>
+            <Icon />
+          </span>
+          <span className={['text-[15px] font-semibold tracking-[-0.01em]', collapsed ? 'lg:hidden' : ''].join(' ')}>{label}</span>
+        </>
+      )}
+    </NavLink>
+  );
+}
+
+function AdminSidebar({ cafe, authEnabled, collapsed, onToggle }) {
+  const navItems = [
+    { to: '/dashboard', label: 'Dashboard', icon: DashboardIcon },
+    { to: '/kitchen', label: "Today's Prep", icon: PrepIcon },
+    { to: '/admin', label: 'Admin Cafe', icon: AdminIcon }
   ];
 
   return (
-    <nav className="bg-white border-b border-gray-100 sticky top-0 z-50">
-      <div className="max-w-6xl mx-auto px-4 md:px-6 flex items-center justify-between h-14">
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2">
-            <span className="text-lg font-semibold text-navy-900" style={{ color: '#1F4E79' }}>Menu</span>
-            {cafe && <span className="hidden md:block text-xs text-gray-400 border-l border-gray-200 pl-3">{cafe.name}</span>}
-            {!authEnabled && (
-              <span className="hidden md:block text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
-                Guest Mode
-              </span>
-            )}
-          </div>
-          <div className="flex gap-1">
-            {links.map(link => (
-              <NavLink
-                key={link.to}
-                to={link.to}
-                className={({ isActive }) =>
-                  `px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${isActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-900'}`
-                }
-              >
-                {link.label}
-              </NavLink>
-            ))}
+    <aside className={[
+      'bg-white border border-slate-200 rounded-[30px] p-4 flex flex-col gap-4 shrink-0 shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
+      collapsed ? 'lg:w-[108px]' : 'lg:w-[290px]',
+      'w-full lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)]'
+    ].join(' ')}>
+      <div className="flex items-center justify-between gap-3">
+        <div className={['flex items-center gap-3 min-w-0', collapsed ? 'lg:justify-center lg:w-full' : ''].join(' ')}>
+          <BrandMark />
+          <div className={collapsed ? 'lg:hidden' : ''}>
+            <p className="text-[18px] leading-none font-bold tracking-[-0.03em] text-slate-950">Menu</p>
+            <p className="text-sm text-slate-400 mt-1">Admin console</p>
           </div>
         </div>
 
-        {authEnabled ? (
-          <UserButton afterSignOutUrl="/" />
-        ) : (
-          <span className="text-xs text-gray-400">No auth configured</span>
-        )}
+        <button
+          type="button"
+          onClick={onToggle}
+          className="hidden lg:flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-400 hover:text-slate-700 hover:bg-white transition-colors"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-4 h-4 transition-transform ${collapsed ? 'rotate-180' : ''}`}>
+            <path d="m15 18-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
       </div>
-    </nav>
+
+      <div className="h-px bg-slate-100" />
+
+      <div className="flex flex-col lg:flex-1 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-2">
+          {navItems.map((item) => (
+            <ShellNavLink key={item.to} {...item} collapsed={collapsed} />
+          ))}
+        </div>
+
+        <div className={['pt-4 mt-2 border-t border-slate-100', collapsed ? 'lg:hidden' : ''].join(' ')}>
+          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-400 mb-3">Workspace</p>
+          <div className="space-y-3 text-sm text-slate-500">
+            <p>Prep automation</p>
+            <p>Forecasting</p>
+            <p>Owner access</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-auto pt-4 border-t border-slate-100 flex items-center gap-3">
+        <div className="w-11 h-11 rounded-2xl bg-slate-950 text-white flex items-center justify-center text-sm font-bold">M</div>
+        <div className={collapsed ? 'lg:hidden' : 'min-w-0'}>
+          <p className="text-sm font-semibold text-slate-900 truncate">{cafe?.name || 'No cafe selected'}</p>
+          <p className="text-xs text-slate-400 truncate">{authEnabled ? 'Protected workspace' : 'Guest mode'}</p>
+        </div>
+      </div>
+    </aside>
   );
+}
+
+function pageMetaForPath(pathname) {
+  if (pathname.includes('/kitchen')) {
+    return {
+      eyebrow: 'Operations',
+      title: "Today's Prep",
+      subtitle: 'Live checklist, actual prep capture, and execution analytics.'
+    };
+  }
+
+  if (pathname.includes('/admin')) {
+    return {
+      eyebrow: 'Management',
+      title: 'Admin Cafe',
+      subtitle: 'Manage cafes, owners, recipes, and operational settings.'
+    };
+  }
+
+  return {
+    eyebrow: 'Overview',
+    title: 'Dashboard',
+    subtitle: 'Track savings, waste reduction, forecast performance, and daily trends.'
+  };
 }
 
 function NoCafeState() {
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto">
-      <Card className="p-8 text-center">
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">No cafe found yet</h2>
-        <p className="text-sm text-gray-500 mb-5">
+      <Card className="p-10 text-center">
+        <h2 className="text-2xl font-bold tracking-[-0.03em] text-slate-950 mb-2">No cafe found yet</h2>
+        <p className="text-sm text-slate-500 mb-6">
           Add your first cafe in Admin to start generating prep lists and forecasts.
         </p>
         <Button onClick={() => { window.location.hash = '/admin'; }}>
@@ -90,26 +219,82 @@ function NoCafeState() {
   );
 }
 
-function AppShell({ cafe, authEnabled, onCafeChange }) {
+function ShellHeader({ cafe, authEnabled }) {
+  const location = useLocation();
+  const meta = pageMetaForPath(location.pathname);
+
   return (
-    <>
-      <Nav cafe={cafe} authEnabled={authEnabled} />
-      <main className="min-h-screen bg-gray-50">
-        <Routes>
-          <Route path="/" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
-          <Route
-            path="/dashboard"
-            element={cafe ? <OwnerDashboard cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
-          />
-          <Route
-            path="/kitchen"
-            element={cafe ? <KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
-          />
-          <Route path="/admin" element={<AdminPanel onCafeChange={onCafeChange} currentCafeId={cafe?.id} />} />
-          <Route path="*" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
-        </Routes>
-      </main>
-    </>
+    <Card className="px-6 py-5">
+      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-400 mb-2">{meta.eyebrow}</p>
+          <h1 className="text-[32px] leading-none font-bold tracking-[-0.04em] text-slate-950">{meta.title}</h1>
+          <p className="text-sm text-slate-500 mt-2">{meta.subtitle}</p>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap xl:justify-end">
+          {cafe && (
+            <div className="inline-flex items-center rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700">
+              {cafe.name}
+            </div>
+          )}
+          {!authEnabled && (
+            <div className="inline-flex items-center rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700">
+              Guest mode
+            </div>
+          )}
+          {authEnabled ? (
+            <div className="inline-flex items-center rounded-2xl border border-slate-200 bg-white px-2 py-2">
+              <UserButton afterSignOutUrl="/" />
+            </div>
+          ) : (
+            <div className="inline-flex items-center rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-400">
+              No auth configured
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function AppShell({ cafe, authEnabled, onCafeChange }) {
+  const [collapsed, setCollapsed] = useState(() => readSidebarState());
+
+  useEffect(() => {
+    storeSidebarState(collapsed);
+  }, [collapsed]);
+
+  return (
+    <div className="min-h-screen bg-[#edf2f7] p-4 md:p-5">
+      <div className="max-w-[1600px] mx-auto flex flex-col lg:flex-row gap-5">
+        <AdminSidebar
+          cafe={cafe}
+          authEnabled={authEnabled}
+          collapsed={collapsed}
+          onToggle={() => setCollapsed((prev) => !prev)}
+        />
+
+        <div className="flex-1 min-w-0 flex flex-col gap-5">
+          <ShellHeader cafe={cafe} authEnabled={authEnabled} />
+          <main className="min-w-0">
+            <Routes>
+              <Route path="/" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
+              <Route
+                path="/dashboard"
+                element={cafe ? <OwnerDashboard cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
+              />
+              <Route
+                path="/kitchen"
+                element={cafe ? <KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
+              />
+              <Route path="/admin" element={<AdminPanel onCafeChange={onCafeChange} currentCafeId={cafe?.id} />} />
+              <Route path="*" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
+            </Routes>
+          </main>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -190,7 +375,7 @@ function AppContent({ authEnabled }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-[#edf2f7]">
         <Spinner />
       </div>
     );
@@ -205,12 +390,19 @@ function AppContent({ authEnabled }) {
 
 function LoginPage() {
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
-      <div className="mb-8 text-center">
-        <h1 className="text-3xl font-semibold text-gray-900" style={{ color: '#1F4E79' }}>Menu</h1>
-        <p className="text-sm text-gray-400 mt-1">Cafe operations intelligence</p>
+    <div className="min-h-screen bg-[#edf2f7] flex items-center justify-center p-4">
+      <div className="w-full max-w-[520px]">
+        <Card className="p-8 md:p-10">
+          <div className="flex items-center gap-4 mb-8">
+            <BrandMark />
+            <div>
+              <h1 className="text-[28px] leading-none font-bold tracking-[-0.04em] text-slate-950">Menu</h1>
+              <p className="text-sm text-slate-500 mt-2">Cafe operations intelligence for prep, waste, and forecasting.</p>
+            </div>
+          </div>
+          <SignIn routing="hash" />
+        </Card>
       </div>
-      <SignIn routing="hash" />
     </div>
   );
 }
