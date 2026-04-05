@@ -16,6 +16,18 @@ function isoDateFromDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+function normalizeDbDateValue(value) {
+  if (!value) return null;
+  if (value instanceof Date) return isoDateFromDate(value);
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const leadingIso = raw.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(leadingIso)) return leadingIso;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return isoDateFromDate(parsed);
+}
+
 function shiftIsoDate(value, days) {
   const normalized = normalizeIsoDate(value);
   if (!normalized) return null;
@@ -519,8 +531,10 @@ async function buildFeatureStore(options = {}) {
 
     const txByKey = new Map();
     for (const row of txResult.rows) {
+      const txDate = normalizeDbDateValue(row.tx_date);
+      if (!txDate) continue;
       txByKey.set(
-        createMapKey(row.cafe_id, row.item_id, isoDateFromDate(new Date(`${row.tx_date}T12:00:00`))),
+        createMapKey(row.cafe_id, row.item_id, txDate),
         {
           quantity: toNumber(row.quantity, 0),
           revenue: toNumber(row.revenue, 0),
@@ -531,8 +545,10 @@ async function buildFeatureStore(options = {}) {
 
     const weatherByKey = new Map();
     for (const row of weatherResult.rows) {
+      const weatherDate = normalizeDbDateValue(row.weather_date);
+      if (!weatherDate) continue;
       weatherByKey.set(
-        createMapKey(row.cafe_id, isoDateFromDate(new Date(`${row.weather_date}T12:00:00`))),
+        createMapKey(row.cafe_id, weatherDate),
         {
           condition: row.condition || null,
           tempC: row.temp_c === null || row.temp_c === undefined ? null : toNumber(row.temp_c, 0)
@@ -542,7 +558,8 @@ async function buildFeatureStore(options = {}) {
 
     const holidayByDate = new Map();
     for (const row of holidaysResult.rows) {
-      const key = isoDateFromDate(new Date(`${row.holiday_date}T12:00:00`));
+      const key = normalizeDbDateValue(row.holiday_date);
+      if (!key) continue;
       if (!holidayByDate.has(key)) {
         holidayByDate.set(key, {
           holidayName: row.holiday_name,
@@ -553,8 +570,10 @@ async function buildFeatureStore(options = {}) {
 
     const dailyByKey = new Map();
     for (const row of dailyLogsResult.rows) {
+      const logDate = normalizeDbDateValue(row.log_date);
+      if (!logDate) continue;
       dailyByKey.set(
-        createMapKey(row.cafe_id, isoDateFromDate(new Date(`${row.log_date}T12:00:00`))),
+        createMapKey(row.cafe_id, logDate),
         {
           hasLog: true,
           wasteValue: toNumber(row.waste_value, 0),
@@ -565,8 +584,10 @@ async function buildFeatureStore(options = {}) {
 
     const forecastByKey = new Map();
     for (const row of forecastResult.rows) {
+      const forecastDate = normalizeDbDateValue(row.forecast_date);
+      if (!forecastDate) continue;
       forecastByKey.set(
-        createMapKey(row.cafe_id, row.item_id, isoDateFromDate(new Date(`${row.forecast_date}T12:00:00`))),
+        createMapKey(row.cafe_id, row.item_id, forecastDate),
         {
           predictedQty: toNumber(row.predicted_qty, 0),
           basePredictedQty: toNumber(row.base_predicted_qty, 0),
