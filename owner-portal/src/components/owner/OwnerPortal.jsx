@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import OwnerDashboard from '../dashboard/OwnerDashboard';
 import KitchenView from '../kitchen/KitchenView';
-import { Button, Card, Spinner } from '../shared';
+import { Button, Card, Spinner, Badge } from '../shared';
 import { ownerAuthApi, ownerPortalApi } from '../../lib/api';
 
 const OWNER_SELECTED_CAFE_KEY = 'menu.ownerSelectedCafeId';
@@ -21,6 +21,9 @@ const CANADIAN_PROVINCES = [
   { code: 'SK', name: 'Saskatchewan' },
   { code: 'YT', name: 'Yukon' }
 ];
+const fieldClassName = 'w-full rounded-2xl px-4 py-3 text-sm';
+const labelClassName = 'mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-ink-500';
+const codeFieldClassName = 'w-full rounded-2xl px-4 py-3 text-sm tracking-[0.2em]';
 
 function formatCanadianPhoneInput(value) {
   return String(value || '')
@@ -272,7 +275,11 @@ export default function OwnerPortal() {
 
   if (loading) {
     return (
-      <div className="min-h-[70vh] flex items-center justify-center">
+      <div className="app-page flex min-h-[70vh] flex-col items-center justify-center gap-4">
+        <div className="flex h-16 w-16 items-center justify-center rounded-[1.6rem] bg-gradient-to-br from-navy-900 via-navy-700 to-teal-600 text-2xl font-display font-bold text-white shadow-glow">
+          M
+        </div>
+        <p className="text-sm font-medium text-ink-500">Loading your owner workspace</p>
         <Spinner />
       </div>
     );
@@ -280,80 +287,105 @@ export default function OwnerPortal() {
 
   if (!owner) {
     return (
-      <div className="p-4 md:p-6 max-w-2xl mx-auto">
-        <Card className="p-7">
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">Cafe owner sign-in</h2>
-          <p className="text-sm text-gray-500 mb-5">
-            Enter your email to continue. First-time owners will complete profile setup once.
-          </p>
+      <div className="app-page">
+        <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
+          <Card className="menu-hero-card border-transparent bg-ink-950 p-8 text-white shadow-float md:p-10">
+            <span className="menu-eyebrow border-white/10 bg-white/10 text-white/70">Owner portal</span>
+            <h2 className="mt-6 font-display text-4xl font-semibold tracking-tight text-white md:text-[3.2rem]">
+              Run your cafes with less noise and more signal.
+            </h2>
+            <p className="mt-4 max-w-xl text-base leading-7 text-white/70">
+              Menu gives owners a calmer way to move from forecast to prep to performance review, without jumping between disconnected tools.
+            </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div className="mt-8 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-[26px] border border-white/10 bg-white/10 p-5">
+                <p className="text-[0.68rem] uppercase tracking-[0.18em] text-white/50">Sign-in flow</p>
+                <p className="mt-3 font-display text-3xl text-white">Email first</p>
+                <p className="mt-2 text-sm leading-6 text-white/70">Existing owners verify quickly. First-time owners complete profile setup once.</p>
+              </div>
+              <div className="rounded-[26px] border border-white/10 bg-white/10 p-5">
+                <p className="text-[0.68rem] uppercase tracking-[0.18em] text-white/50">Daily loop</p>
+                <p className="mt-3 font-display text-3xl text-white">Dashboard + kitchen</p>
+                <p className="mt-2 text-sm leading-6 text-white/70">Switch from high-level performance to station-level prep without leaving the workspace.</p>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="menu-hero-card p-7 md:p-8">
+            <span className="menu-eyebrow">Secure sign-in</span>
+            <h2 className="mt-5 font-display text-3xl font-semibold tracking-tight text-ink-950">Cafe owner sign-in</h2>
+            <p className="mt-3 text-sm leading-6 text-ink-500">
+              Enter your email to continue. First-time owners will complete their profile setup before codes are sent.
+            </p>
+
+            <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
-              <label className="block text-xs text-gray-400 mb-1">Email *</label>
+              <label className={labelClassName}>Email *</label>
               <input
                 type="email"
                 value={signInForm.email}
                 onChange={(event) => handleFormChange('email', event.target.value)}
                 placeholder="you@yourcafe.com"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               />
             </div>
 
             {needsProfile && (
               <>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Owner first name *</label>
+              <label className={labelClassName}>Owner first name *</label>
               <input
                 value={signInForm.first_name}
                 onChange={(event) => handleFormChange('first_name', event.target.value)}
                 placeholder="Anam"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Owner last name *</label>
+              <label className={labelClassName}>Owner last name *</label>
               <input
                 value={signInForm.last_name}
                 onChange={(event) => handleFormChange('last_name', event.target.value)}
                 placeholder="Haleem"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Primary phone *</label>
+              <label className={labelClassName}>Primary phone *</label>
               <input
                 value={signInForm.phone}
                 onChange={(event) => handleFormChange('phone', event.target.value)}
                 onBlur={() => handleFormChange('phone', normalizeCanadianPhoneOnBlur(signInForm.phone))}
                 placeholder="+1 000-000-0000"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Secondary phone</label>
+              <label className={labelClassName}>Secondary phone</label>
               <input
                 value={signInForm.secondary_phone}
                 onChange={(event) => handleFormChange('secondary_phone', event.target.value)}
                 onBlur={() => handleFormChange('secondary_phone', normalizeCanadianPhoneOnBlur(signInForm.secondary_phone))}
                 placeholder="+1 000-000-0000"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">City *</label>
+              <label className={labelClassName}>City *</label>
               <input
                 value={signInForm.city}
                 onChange={(event) => handleFormChange('city', event.target.value)}
                 placeholder="Toronto"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Province/Territory *</label>
+              <label className={labelClassName}>Province/Territory *</label>
               <select
                 value={signInForm.province}
                 onChange={(event) => handleFormChange('province', event.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               >
                 <option value="">Select province</option>
                 {CANADIAN_PROVINCES.map((province) => (
@@ -364,30 +396,30 @@ export default function OwnerPortal() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Street address *</label>
+              <label className={labelClassName}>Street address *</label>
               <input
                 value={signInForm.street_address}
                 onChange={(event) => handleFormChange('street_address', event.target.value)}
                 placeholder="123 Queen St W"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Unit number</label>
+              <label className={labelClassName}>Unit number</label>
               <input
                 value={signInForm.unit_number}
                 onChange={(event) => handleFormChange('unit_number', event.target.value)}
                 placeholder="Unit 201"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Postal code *</label>
+              <label className={labelClassName}>Postal code *</label>
               <input
                 value={signInForm.postal_code}
                 onChange={(event) => handleFormChange('postal_code', event.target.value)}
                 placeholder="M5V 2T6"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                className={fieldClassName}
               />
             </div>
               </>
@@ -395,39 +427,39 @@ export default function OwnerPortal() {
           </div>
 
           {codeSent && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Email code *</label>
+                <label className={labelClassName}>Email code *</label>
                 <input
                   value={emailCode}
                   onChange={(event) => setEmailCode(event.target.value.replace(/[^\d]/g, '').slice(0, 6))}
                   placeholder="123456"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm tracking-[0.2em] focus:outline-none focus:border-navy-900"
+                  className={codeFieldClassName}
                 />
               </div>
               {requiresPhoneCode && (
                 <div>
-                  <label className="block text-xs text-gray-400 mb-1">SMS code *</label>
+                  <label className={labelClassName}>SMS code *</label>
                   <input
                     value={phoneCode}
                     onChange={(event) => setPhoneCode(event.target.value.replace(/[^\d]/g, '').slice(0, 6))}
                     placeholder="654321"
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm tracking-[0.2em] focus:outline-none focus:border-navy-900"
+                    className={codeFieldClassName}
                   />
                 </div>
               )}
             </div>
           )}
 
-          {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
+          {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
           {needsProfile && missingProfileFields.length > 0 && (
-            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+            <p className="mt-4 rounded-[20px] border border-sand-100 bg-sand-100/70 px-4 py-3 text-xs text-amber-700">
               Missing: {missingProfileFields.join(', ')}
             </p>
           )}
-          {info && <p className="text-sm text-teal-700 mb-3">{info}</p>}
+          {info && <p className="mt-4 text-sm text-teal-700">{info}</p>}
 
-          <div className="flex flex-wrap gap-2">
+          <div className="mt-5 flex flex-wrap gap-3">
             {codeSent ? (
               <>
                 <Button
@@ -446,70 +478,94 @@ export default function OwnerPortal() {
               </Button>
             )}
           </div>
-        </Card>
+          </Card>
+        </div>
       </div>
     );
   }
 
   if (!selectedCafe) {
     return (
-      <div className="p-4 md:p-6 max-w-xl mx-auto">
-        <Card className="p-7">
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">No active cafes found</h2>
-          <p className="text-sm text-gray-500 mb-5">
+      <div className="app-page">
+        <Card className="menu-hero-card mx-auto max-w-xl p-8 text-center">
+          <span className="menu-eyebrow">Owner workspace</span>
+          <h2 className="mt-5 font-display text-3xl font-semibold tracking-tight text-ink-950">No active cafes found</h2>
+          <p className="mt-3 text-sm leading-6 text-ink-500">
             This owner account is signed in, but no active cafes are linked right now.
           </p>
-          <Button onClick={handleSignOut}>Sign out</Button>
+          <div className="mt-6">
+            <Button onClick={handleSignOut}>Sign out</Button>
+          </div>
         </Card>
       </div>
     );
   }
 
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
-      <Card className="p-4 mb-5">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+    <div className="app-page">
+      <Card className="menu-hero-card mb-6 border-transparent bg-ink-950 p-6 text-white shadow-float md:p-7">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <p className="text-sm text-gray-400">Signed in as</p>
-            <p className="text-sm font-medium text-gray-900">{owner.email}</p>
+            <span className="inline-flex items-center rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/70">
+              Owner workspace
+            </span>
+            <h1 className="mt-5 font-display text-4xl font-semibold tracking-tight text-white">{selectedCafe.name}</h1>
+            <p className="mt-2 text-sm leading-6 text-white/70">
+              Signed in as {owner.email} &middot; {cafes.length} linked cafe{cafes.length === 1 ? '' : 's'}
+            </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-gray-400">Cafe</label>
-            <select
-              value={selectedCafe.id}
-              onChange={(event) => setSelectedCafeId(parseInt(event.target.value, 10))}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
-            >
-              {cafes.map((cafe) => (
-                <option key={cafe.id} value={cafe.id}>
-                  {cafe.name} ({cafe.city || 'Toronto'})
-                </option>
-              ))}
-            </select>
-          </div>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+            <div className="flex items-center gap-3">
+              <label className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">Cafe</label>
+              <select
+                value={selectedCafe.id}
+                onChange={(event) => setSelectedCafeId(parseInt(event.target.value, 10))}
+                className="min-w-[15rem] rounded-full border border-white/10 bg-white/10 px-4 py-3 text-sm text-white"
+              >
+                {cafes.map((cafe) => (
+                  <option key={cafe.id} value={cafe.id}>
+                    {cafe.name} ({cafe.city || 'Toronto'})
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <div className="flex items-center gap-2">
-            <NavLink
-              to="dashboard"
-              className={({ isActive }) =>
-                `px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${isActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-900'}`
-              }
+            <div className="flex flex-wrap items-center gap-2 rounded-[1.3rem] border border-white/10 bg-white/10 p-1.5">
+              <NavLink
+                to="dashboard"
+                className={({ isActive }) =>
+                  `rounded-full px-4 py-2 text-sm font-semibold transition duration-200 ${isActive ? 'bg-white text-ink-950 shadow-sm' : 'text-white/70 hover:bg-white/10 hover:text-white'}`
+                }
+              >
+                Dashboard
+              </NavLink>
+              <NavLink
+                to="kitchen"
+                className={({ isActive }) =>
+                  `rounded-full px-4 py-2 text-sm font-semibold transition duration-200 ${isActive ? 'bg-white text-ink-950 shadow-sm' : 'text-white/70 hover:bg-white/10 hover:text-white'}`
+                }
+              >
+                Kitchen
+              </NavLink>
+            </div>
+
+            <Button
+              size="sm"
+              variant="secondary"
+              className="border-white/10 bg-white/10 text-white shadow-none hover:bg-white/20 hover:text-white"
+              onClick={handleSignOut}
             >
-              Dashboard
-            </NavLink>
-            <NavLink
-              to="kitchen"
-              className={({ isActive }) =>
-                `px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${isActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-900'}`
-              }
-            >
-              Kitchen
-            </NavLink>
-            <Button size="sm" variant="ghost" onClick={handleSignOut}>Sign out</Button>
+              Sign out
+            </Button>
           </div>
         </div>
       </Card>
+
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <Badge color="green">Owner access active</Badge>
+        <p className="text-sm text-ink-500">Switch between dashboard and kitchen views without leaving the signed-in workspace.</p>
+      </div>
 
       <Routes>
         <Route index element={<Navigate to="dashboard" replace />} />

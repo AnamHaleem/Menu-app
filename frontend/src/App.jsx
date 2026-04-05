@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { HashRouter as Router, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { SignIn, SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import OwnerDashboard from './components/dashboard/OwnerDashboard';
 import KitchenView from './components/kitchen/KitchenView';
 import AdminPanel from './components/admin/AdminPanel';
 import { cafesApi, metricsApi } from './lib/api';
-import { Spinner, Card, Button } from './components/shared';
+import { Spinner, Card, Button, Badge } from './components/shared';
 
 const clerkEnabled = Boolean(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const SELECTED_CAFE_STORAGE_KEY = 'menu.selectedCafeId';
@@ -37,54 +37,106 @@ function Nav({ cafe, authEnabled }) {
   ];
 
   return (
-    <nav className="bg-white border-b border-gray-100 sticky top-0 z-50">
-      <div className="max-w-6xl mx-auto px-4 md:px-6 flex items-center justify-between h-14">
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2">
-            <span className="text-lg font-semibold text-navy-900" style={{ color: '#1F4E79' }}>Menu</span>
-            {cafe && <span className="hidden md:block text-xs text-gray-400 border-l border-gray-200 pl-3">{cafe.name}</span>}
-            {!authEnabled && (
-              <span className="hidden md:block text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
-                Guest Mode
-              </span>
+    <header className="sticky top-0 z-50 px-3 pt-3 md:px-5">
+      <nav className="mx-auto max-w-7xl rounded-[32px] border border-white/80 bg-white/70 px-4 py-4 shadow-soft backdrop-blur-xl">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center">
+            <div className="flex items-center gap-3">
+              <div className="menu-floating-accent flex h-12 w-12 items-center justify-center rounded-[1.4rem] bg-gradient-to-br from-navy-900 via-navy-700 to-teal-600 text-lg font-display font-bold text-white shadow-glow">
+                M
+              </div>
+              <div>
+                <p className="font-display text-xl font-semibold leading-none text-ink-950">Menu</p>
+                <p className="mt-1 text-sm text-ink-500">Cafe operations intelligence</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {cafe && (
+                <div className="inline-flex items-center gap-3 rounded-full border border-white/80 bg-white/70 px-4 py-2 shadow-sm">
+                  <span className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-ink-500">Active cafe</span>
+                  <span className="font-semibold text-ink-900">{cafe.name}</span>
+                </div>
+              )}
+              {!authEnabled && <Badge color="amber">Guest Mode</Badge>}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between xl:justify-end">
+            <div className="flex flex-wrap items-center gap-2 rounded-[1.3rem] border border-white/80 bg-slate-50/70 p-1.5 shadow-sm">
+              {links.map((link) => (
+                <NavLink
+                  key={link.to}
+                  to={link.to}
+                  className={({ isActive }) =>
+                    [
+                      'rounded-full px-4 py-2 text-sm font-semibold transition duration-200',
+                      isActive
+                        ? 'bg-ink-950 text-white shadow-lg shadow-slate-900/15'
+                        : 'text-ink-500 hover:bg-white hover:text-ink-900'
+                    ].join(' ')
+                  }
+                >
+                  {link.label}
+                </NavLink>
+              ))}
+            </div>
+
+            {authEnabled ? (
+              <div className="inline-flex items-center justify-center rounded-full border border-white/80 bg-white/75 p-1.5 shadow-sm">
+                <UserButton afterSignOutUrl="/" />
+              </div>
+            ) : (
+              <div className="inline-flex items-center rounded-full border border-white/80 bg-white/75 px-4 py-2 text-xs font-medium text-ink-500 shadow-sm">
+                No auth configured
+              </div>
             )}
           </div>
-          <div className="flex gap-1">
-            {links.map(link => (
-              <NavLink
-                key={link.to}
-                to={link.to}
-                className={({ isActive }) =>
-                  `px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${isActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-900'}`
-                }
-              >
-                {link.label}
-              </NavLink>
-            ))}
-          </div>
         </div>
-
-        {authEnabled ? (
-          <UserButton afterSignOutUrl="/" />
-        ) : (
-          <span className="text-xs text-gray-400">No auth configured</span>
-        )}
-      </div>
-    </nav>
+      </nav>
+    </header>
   );
 }
 
 function NoCafeState() {
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto">
-      <Card className="p-8 text-center">
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">No cafe found yet</h2>
-        <p className="text-sm text-gray-500 mb-5">
-          Add your first cafe in Admin to start generating prep lists and forecasts.
-        </p>
-        <Button onClick={() => { window.location.hash = '/admin'; }}>
-          Go to Admin
-        </Button>
+    <div className="app-page">
+      <Card className="menu-hero-card p-8 md:p-10">
+        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+          <div>
+            <span className="menu-eyebrow">Setup required</span>
+            <h2 className="mt-5 max-w-xl font-display text-3xl font-semibold tracking-tight text-ink-950 md:text-[2.6rem]">
+              Add your first cafe to start generating prep lists, forecasts, and daily savings insights.
+            </h2>
+            <p className="mt-4 max-w-lg text-base leading-7 text-ink-500">
+              The admin workspace is ready. Once a cafe is added, Menu can begin routing forecasting, kitchen prep, and owner reporting through the rest of the experience.
+            </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Button onClick={() => { window.location.hash = '/admin'; }} size="lg">
+                Open Admin Setup
+              </Button>
+              <Button variant="secondary" size="lg" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+                Review shell
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-[28px] bg-ink-950 p-6 text-white shadow-float">
+            <p className="text-[0.72rem] font-semibold uppercase tracking-[0.22em] text-white/50">What unlocks next</p>
+            <div className="mt-6 space-y-4">
+              {[
+                'Forecast-aware prep recommendations for each day.',
+                'Kitchen tracking with completion and actual prep logging.',
+                'Owner metrics across waste, labour savings, and incident trends.'
+              ].map((item) => (
+                <div key={item} className="flex items-start gap-3">
+                  <div className="mt-1 h-2.5 w-2.5 rounded-full bg-gradient-to-br from-teal-600 to-navy-700" />
+                  <p className="text-sm leading-6 text-white/80">{item}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </Card>
     </div>
   );
@@ -94,7 +146,7 @@ function AppShell({ cafe, authEnabled, onCafeChange }) {
   return (
     <>
       <Nav cafe={cafe} authEnabled={authEnabled} />
-      <main className="min-h-screen bg-gray-50">
+      <main className="min-h-screen pb-12">
         <Routes>
           <Route path="/" element={<Navigate to={cafe ? '/dashboard' : '/admin'} replace />} />
           <Route
@@ -126,7 +178,7 @@ function AppContent({ authEnabled }) {
         if (!cafes.length) return;
 
         const storedCafeId = getStoredCafeId();
-        let selectedCafe = cafes.find(c => c.id === storedCafeId) || null;
+        let selectedCafe = cafes.find((currentCafe) => currentCafe.id === storedCafeId) || null;
 
         if (!selectedCafe) {
           const cafesWithScores = await Promise.all(
@@ -190,7 +242,11 @@ function AppContent({ authEnabled }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-6">
+        <div className="flex h-16 w-16 items-center justify-center rounded-[1.6rem] bg-gradient-to-br from-navy-900 via-navy-700 to-teal-600 text-2xl font-display font-bold text-white shadow-glow">
+          M
+        </div>
+        <p className="text-sm font-medium text-ink-500">Loading your operations workspace</p>
         <Spinner />
       </div>
     );
@@ -205,12 +261,44 @@ function AppContent({ authEnabled }) {
 
 function LoginPage() {
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
-      <div className="mb-8 text-center">
-        <h1 className="text-3xl font-semibold text-gray-900" style={{ color: '#1F4E79' }}>Menu</h1>
-        <p className="text-sm text-gray-400 mt-1">Cafe operations intelligence</p>
+    <div className="min-h-screen px-4 py-8 md:px-6">
+      <div className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl items-center gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <Card className="menu-hero-card border-transparent bg-ink-950 p-8 text-white shadow-float md:p-12">
+          <span className="menu-eyebrow border-white/10 bg-white/10 text-white/70">Operations suite</span>
+          <h1 className="mt-6 max-w-xl font-display text-4xl font-semibold tracking-tight text-white md:text-[3.4rem]">
+            A calmer daily operating system for modern cafes.
+          </h1>
+          <p className="mt-5 max-w-xl text-base leading-7 text-white/70">
+            Forecast smarter, prep cleaner, and keep owners aligned with a control surface that feels as sharp as the service it supports.
+          </p>
+
+          <div className="mt-8 grid gap-4 sm:grid-cols-2">
+            <div className="rounded-[26px] border border-white/10 bg-white/10 p-5">
+              <p className="text-[0.68rem] uppercase tracking-[0.18em] text-white/50">Daily pulse</p>
+              <p className="mt-3 font-display text-3xl text-white">Forecast + prep</p>
+              <p className="mt-2 text-sm leading-6 text-white/70">Kitchen-ready recommendations with weather and holiday awareness.</p>
+            </div>
+            <div className="rounded-[26px] border border-white/10 bg-white/10 p-5">
+              <p className="text-[0.68rem] uppercase tracking-[0.18em] text-white/50">Owner clarity</p>
+              <p className="mt-3 font-display text-3xl text-white">Metrics that matter</p>
+              <p className="mt-2 text-sm leading-6 text-white/70">See waste reduction, labour savings, and risk trends at a glance.</p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="menu-hero-card p-5 md:p-8">
+          <div className="mx-auto max-w-md">
+            <span className="menu-eyebrow">Secure access</span>
+            <h2 className="mt-5 font-display text-3xl font-semibold tracking-tight text-ink-950">Sign in to Menu</h2>
+            <p className="mt-3 text-sm leading-6 text-ink-500">
+              Owners and operators can access dashboard, kitchen, and admin workflows from a single modern workspace.
+            </p>
+            <div className="mt-6 flex justify-center">
+              <SignIn routing="hash" />
+            </div>
+          </div>
+        </Card>
       </div>
-      <SignIn routing="hash" />
     </div>
   );
 }
