@@ -29,6 +29,7 @@ function CafeCard({ cafe, onSelect, selected, dateRange }) {
       <div className="flex items-center justify-between mb-3">
         <div>
           <p className="font-semibold text-gray-900">{cafe.name}</p>
+          <p className="text-xs text-gray-400">Cafe ID: {cafe.id}</p>
           <p className="text-xs text-gray-400">{cafe.city} &mdash; {cafe.owner_name}</p>
         </div>
         <Badge color={cafe.active ? 'green' : 'gray'}>{cafe.active ? 'Active' : 'Inactive'}</Badge>
