@@ -1,15 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { cafesApi, itemsApi, ingredientsApi, recipesApi, metricsApi, adminOwnersApi } from '../../lib/api';
-import { Spinner, Badge, Button, Card, SectionHeader, MetricCard } from '../shared';
+import {
+  Spinner,
+  Badge,
+  Button,
+  Card,
+  SectionHeader,
+  MetricCard,
+  DateRangePicker,
+  buildRelativeDateRange,
+  formatDateRangeLabel
+} from '../shared';
 
 const fmt$ = (v) => '$' + Math.round(Number(v) || 0).toLocaleString();
 const SELECTED_CAFE_STORAGE_KEY = 'menu.selectedCafeId';
 
-function CafeCard({ cafe, onSelect, selected }) {
+function CafeCard({ cafe, onSelect, selected, dateRange }) {
   const [metrics, setMetrics] = useState(null);
   useEffect(() => {
-    metricsApi.get(cafe.id).then(setMetrics).catch(() => {});
-  }, [cafe.id]);
+    metricsApi.get(cafe.id, dateRange).then(setMetrics).catch(() => {});
+  }, [cafe.id, dateRange?.startDate, dateRange?.endDate]);
 
   return (
     <div
@@ -414,7 +424,7 @@ function OwnerAccessSection({ cafe }) {
   );
 }
 
-function CafeDetail({ cafe, onCafeDeleted, onCafeUpdated }) {
+function CafeDetail({ cafe, onCafeDeleted, onCafeUpdated, dateRange }) {
   const [tab, setTab] = useState('menu');
   const [items, setItems] = useState([]);
   const [ingredients, setIngredients] = useState([]);
@@ -441,18 +451,19 @@ function CafeDetail({ cafe, onCafeDeleted, onCafeUpdated }) {
   });
 
   useEffect(() => {
+    setLoading(true);
     Promise.all([
       itemsApi.get(cafe.id),
       ingredientsApi.get(cafe.id),
       recipesApi.get(cafe.id),
-      metricsApi.get(cafe.id)
+      metricsApi.get(cafe.id, dateRange)
     ]).then(([i, ing, r, m]) => {
       setItems(i);
       setIngredients(ing);
       setRecipes(r);
       setMetrics(m);
     }).finally(() => setLoading(false));
-  }, [cafe.id]);
+  }, [cafe.id, dateRange?.startDate, dateRange?.endDate]);
 
   useEffect(() => {
     setPrepSendTime(cafe.prep_send_time || '06:00');
@@ -583,21 +594,23 @@ function CafeDetail({ cafe, onCafeDeleted, onCafeUpdated }) {
     { key: 'recipes', label: 'Recipes' },
     { key: 'settings', label: 'Settings' }
   ];
+  const analysisLabel = metrics?.range?.label || formatDateRangeLabel(dateRange?.startDate, dateRange?.endDate);
 
   return (
     <div>
       <div className="mb-6">
         <h2 className="text-xl font-semibold text-gray-900">{cafe.name}</h2>
         <p className="text-sm text-gray-400">{cafe.city} &mdash; {cafe.email}</p>
+        <p className="text-xs text-gray-400 mt-2">Analysis window: {analysisLabel}</p>
       </div>
 
       {/* Metrics row */}
       {metrics && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <MetricCard label="Total savings" value={fmt$(metrics.allTime.totalSavings)} color="text-teal-600" />
-          <MetricCard label="Days running" value={metrics.daysRunning} />
+          <MetricCard label="Savings in range" value={fmt$(metrics.allTime.totalSavings)} color="text-teal-600" />
+          <MetricCard label="Logged days" value={metrics.daysRunning} />
           <MetricCard label="86 incidents" value={metrics.allTime.total86} color={metrics.allTime.total86 === 0 ? 'text-teal-600' : 'text-red-500'} />
-          <MetricCard label="Waste reduction" value={metrics.wasteReductionPct + '%'} color="text-teal-600" />
+          <MetricCard label="Waste reduction" value={metrics.wasteReductionPct + '%'} sub={analysisLabel} color="text-teal-600" />
         </div>
       )}
 
@@ -850,6 +863,7 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
   const [loading, setLoading] = useState(true);
   const [showAddCafe, setShowAddCafe] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [dateRange, setDateRange] = useState(() => buildRelativeDateRange(30));
 
   const broadcastCafeSelection = (cafe) => {
     setSelectedCafe(cafe || null);
@@ -998,6 +1012,8 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
         <AddCafeForm onSave={handleCafeAdded} onCancel={() => setShowAddCafe(false)} />
       )}
 
+      <DateRangePicker value={dateRange} onChange={setDateRange} className="mb-6" />
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Cafe list */}
         <div className="md:col-span-1">
@@ -1009,6 +1025,7 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
                 cafe={cafe}
                 onSelect={handleSelectCafe}
                 selected={selectedCafe?.id === cafe.id}
+                dateRange={dateRange}
               />
             ))}
             {cafes.length === 0 && (
@@ -1022,7 +1039,7 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
         {/* Cafe detail */}
         <div className="md:col-span-2">
           {selectedCafe
-            ? <CafeDetail cafe={selectedCafe} onCafeDeleted={handleCafeDeleted} onCafeUpdated={handleCafeUpdated} />
+            ? <CafeDetail cafe={selectedCafe} onCafeDeleted={handleCafeDeleted} onCafeUpdated={handleCafeUpdated} dateRange={dateRange} />
             : <div className="text-center py-16 text-sm text-gray-400">Select a café to view details</div>
           }
         </div>

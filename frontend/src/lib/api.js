@@ -17,6 +17,24 @@ const api = axios.create({
 });
 
 const toArray = (value) => (Array.isArray(value) ? value : []);
+const buildQueryParams = (options = {}) => {
+  if (typeof options === 'number') {
+    return { days: options };
+  }
+
+  const params = {};
+  if (options.days !== undefined && options.days !== null && options.days !== '') {
+    params.days = options.days;
+  }
+  if (options.startDate) {
+    params.startDate = options.startDate;
+  }
+  if (options.endDate) {
+    params.endDate = options.endDate;
+  }
+
+  return Object.keys(params).length ? params : undefined;
+};
 const OWNER_TOKEN_STORAGE_KEY = 'menu.ownerAuthToken';
 
 function readOwnerToken() {
@@ -88,11 +106,11 @@ export const prepSummaryApi = {
 };
 
 export const metricsApi = {
-  get: (cafeId) => api.get(`/cafes/${cafeId}/metrics`).then(r => r.data)
+  get: (cafeId, options = {}) => api.get(`/cafes/${cafeId}/metrics`, { params: buildQueryParams(options) }).then(r => r.data)
 };
 
 export const logsApi = {
-  get: (cafeId, days) => api.get(`/cafes/${cafeId}/logs`, { params: { days } }).then(r => toArray(r.data)),
+  get: (cafeId, options = {}) => api.get(`/cafes/${cafeId}/logs`, { params: buildQueryParams(options) }).then(r => toArray(r.data)),
   create: (cafeId, data) => api.post(`/cafes/${cafeId}/logs`, data).then(r => r.data)
 };
 
@@ -147,10 +165,12 @@ export const ownerPortalApi = {
     getAll: () => ownerApi.get('/owner/cafes').then(r => toArray(r.data))
   },
   metrics: {
-    get: (cafeId) => ownerApi.get(`/owner/cafes/${cafeId}/metrics`).then(r => r.data)
+    get: (cafeId, options = {}) =>
+      ownerApi.get(`/owner/cafes/${cafeId}/metrics`, { params: buildQueryParams(options) }).then(r => r.data)
   },
   logs: {
-    get: (cafeId, days) => ownerApi.get(`/owner/cafes/${cafeId}/logs`, { params: { days } }).then(r => toArray(r.data)),
+    get: (cafeId, options = {}) =>
+      ownerApi.get(`/owner/cafes/${cafeId}/logs`, { params: buildQueryParams(options) }).then(r => toArray(r.data)),
     create: (cafeId, data) => ownerApi.post(`/owner/cafes/${cafeId}/logs`, data).then(r => r.data)
   },
   forecast: {

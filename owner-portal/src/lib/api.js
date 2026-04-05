@@ -35,6 +35,25 @@ const publicApi = axios.create({
   withCredentials: true
 });
 
+const buildQueryParams = (options = {}) => {
+  if (typeof options === 'number') {
+    return { days: options };
+  }
+
+  const params = {};
+  if (options.days !== undefined && options.days !== null && options.days !== '') {
+    params.days = options.days;
+  }
+  if (options.startDate) {
+    params.startDate = options.startDate;
+  }
+  if (options.endDate) {
+    params.endDate = options.endDate;
+  }
+
+  return Object.keys(params).length ? params : undefined;
+};
+
 const ownerApi = axios.create({
   baseURL: resolveApiBaseUrl(),
   withCredentials: true
@@ -91,10 +110,12 @@ export const ownerPortalApi = {
       ownerApi.delete(`/owner/cafes/${cafeId}/team/${memberOwnerId}`).then((response) => response.data)
   },
   metrics: {
-    get: (cafeId) => ownerApi.get(`/owner/cafes/${cafeId}/metrics`).then((response) => response.data)
+    get: (cafeId, options = {}) =>
+      ownerApi.get(`/owner/cafes/${cafeId}/metrics`, { params: buildQueryParams(options) }).then((response) => response.data)
   },
   logs: {
-    get: (cafeId, days) => ownerApi.get(`/owner/cafes/${cafeId}/logs`, { params: { days } }).then((response) => toArray(response.data)),
+    get: (cafeId, options = {}) =>
+      ownerApi.get(`/owner/cafes/${cafeId}/logs`, { params: buildQueryParams(options) }).then((response) => toArray(response.data)),
     create: (cafeId, data) => ownerApi.post(`/owner/cafes/${cafeId}/logs`, data).then((response) => response.data)
   },
   forecast: {

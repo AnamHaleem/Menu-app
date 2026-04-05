@@ -26,6 +26,65 @@ const parseBooleanValue = (value) => {
   if (['false', '0', 'no'].includes(normalized)) return false;
   return null;
 };
+const createHttpError = (status, message) => Object.assign(new Error(message), { status });
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const normalizeIsoDate = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (!ISO_DATE_PATTERN.test(raw)) return null;
+  const date = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return raw;
+};
+const formatRangeDateLabel = (value) => {
+  if (!value) return null;
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString('en-CA', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
+};
+const resolveDateRangeOptions = (query = {}) => {
+  const rawStartDate = String(query.startDate || '').trim();
+  const rawEndDate = String(query.endDate || '').trim();
+  const startDate = normalizeIsoDate(rawStartDate);
+  const endDate = normalizeIsoDate(rawEndDate);
+
+  if (rawStartDate && !startDate) {
+    throw createHttpError(400, 'startDate must be a valid YYYY-MM-DD value');
+  }
+  if (rawEndDate && !endDate) {
+    throw createHttpError(400, 'endDate must be a valid YYYY-MM-DD value');
+  }
+  if (startDate && endDate && startDate > endDate) {
+    throw createHttpError(400, 'startDate cannot be after endDate');
+  }
+
+  return { startDate, endDate };
+};
+const buildDateRangeClause = (startDate, endDate, startingIndex = 2) => {
+  const clauses = [];
+  const values = [];
+  let index = startingIndex;
+
+  if (startDate) {
+    clauses.push(`date >= $${index++}::date`);
+    values.push(startDate);
+  }
+
+  if (endDate) {
+    clauses.push(`date <= $${index++}::date`);
+    values.push(endDate);
+  }
+
+  return {
+    clause: clauses.length ? ` AND ${clauses.join(' AND ')}` : '',
+    values,
+    nextIndex: index
+  };
+};
 
 const PREP_TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const isValidPrepTime = (value) => PREP_TIME_PATTERN.test(String(value || '').trim());
@@ -470,81 +529,122 @@ async function listOwners({ cafeId = null, includeInactive = false } = {}) {
   }));
 }
 
-async function buildMetrics(cafeId) {
-  const totalLogs = await pool.query('SELECT COUNT(*) as days FROM daily_logs WHERE cafe_id = $1', [cafeId]);
-  const allTime = await pool.query(`
+async function buildMetrics(cafeId, options = {}) {
+  const { startDate = null, endDate = null } = options;
+  const selectedRange = buildDateRangeClause(startDate, endDate);
+  const selectedValues = [cafeId, ...selectedRange.values];
+
+  const totalLogs = await pool.query(
+    `SELECT COUNT(*) as days FROM daily_logs WHERE cafe_id = $1${selectedRange.clause}`,
+    selectedValues
+  );
+  const selectedWindow = await pool.query(`
     SELECT
       SUM(waste_value) as total_waste,
       SUM(items_86d) as total_86,
       COUNT(*) as days,
       AVG(actual_covers) as avg_covers
-    FROM daily_logs WHERE cafe_id = $1
-  `, [cafeId]);
-  const last30 = await pool.query(`
-    SELECT
-      SUM(waste_value) as waste_30,
-      SUM(items_86d) as incidents_86_30,
-      COUNT(*) as days_30
-    FROM daily_logs WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '30 days'
-  `, [cafeId]);
-  const last7 = await pool.query(`
-    SELECT
-      SUM(waste_value) as waste_7,
-      SUM(items_86d) as incidents_86_7,
-      COUNT(*) as days_7
-    FROM daily_logs WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '7 days'
-  `, [cafeId]);
+    FROM daily_logs
+    WHERE cafe_id = $1${selectedRange.clause}
+  `, selectedValues);
   const baseline = await pool.query(`
     SELECT AVG(seed.waste_value) as avg_waste
     FROM (
       SELECT waste_value
       FROM daily_logs
-      WHERE cafe_id = $1
+      WHERE cafe_id = $1${selectedRange.clause}
       ORDER BY date ASC
       LIMIT 7
     ) seed
+  `, selectedValues);
+
+  const anchorDate = endDate || new Date().toISOString().split('T')[0];
+  const trailing30 = await pool.query(`
+    SELECT
+      SUM(waste_value) as waste_30,
+      SUM(items_86d) as incidents_86_30,
+      COUNT(*) as days_30
+    FROM daily_logs
+    WHERE cafe_id = $1
+      AND date <= $2::date
+      AND date >= ($2::date - INTERVAL '29 days')
+      ${startDate ? 'AND date >= $3::date' : ''}
+  `, startDate ? [cafeId, anchorDate, startDate] : [cafeId, anchorDate]);
+  const trailing7 = await pool.query(`
+    SELECT
+      SUM(waste_value) as waste_7,
+      SUM(items_86d) as incidents_86_7,
+      COUNT(*) as days_7
+    FROM daily_logs
+    WHERE cafe_id = $1
+      AND date <= $2::date
+      AND date >= ($2::date - INTERVAL '6 days')
+      ${startDate ? 'AND date >= $3::date' : ''}
+  `, startDate ? [cafeId, anchorDate, startDate] : [cafeId, anchorDate]);
+
+  const lifetime = await pool.query(`
+    SELECT
+      SUM(waste_value) as total_waste,
+      SUM(items_86d) as total_86,
+      COUNT(*) as days
+    FROM daily_logs
+    WHERE cafe_id = $1
   `, [cafeId]);
 
   const baselineWaste = parseFloat(baseline.rows[0]?.avg_waste || 0);
-  const totalWaste = parseFloat(allTime.rows[0]?.total_waste || 0);
-  const daysRunning = parseInt(totalLogs.rows[0]?.days || 0);
+  const totalWaste = parseFloat(selectedWindow.rows[0]?.total_waste || 0);
+  const daysRunning = parseInt(totalLogs.rows[0]?.days || 0, 10);
   const labourSavedMins = daysRunning * 15;
-  const labourSaved$ = Math.round(labourSavedMins / 60 * 21 * 100) / 100;
+  const labourSaved$ = Math.round((labourSavedMins / 60) * 21 * 100) / 100;
   const projectedWasteWithout = baselineWaste * daysRunning;
   const wasteSaved = Math.max(0, projectedWasteWithout - totalWaste);
   const totalSavings = wasteSaved + labourSaved$;
   const annualised = daysRunning > 0 ? Math.round(totalSavings * (365 / daysRunning)) : 0;
 
-  const last30WasteAfter = parseFloat(last30.rows[0]?.waste_30 || 0);
-  const days30 = parseInt(last30.rows[0]?.days_30 || 1);
-  const avgDailyAfter = last30WasteAfter / days30;
+  const selectedWaste = parseFloat(selectedWindow.rows[0]?.total_waste || 0);
+  const selectedIncidents = parseInt(selectedWindow.rows[0]?.total_86 || 0, 10);
+  const selectedDays = Math.max(daysRunning, 1);
+  const avgDailyAfter = selectedWaste / selectedDays;
   const wasteReductionPct = baselineWaste > 0
     ? Math.round(((baselineWaste - avgDailyAfter) / baselineWaste) * 100)
     : 0;
 
   return {
+    range: {
+      startDate,
+      endDate,
+      label: formatRangeDateLabel(startDate) && formatRangeDateLabel(endDate)
+        ? `${formatRangeDateLabel(startDate)} – ${formatRangeDateLabel(endDate)}`
+        : (formatRangeDateLabel(startDate) || formatRangeDateLabel(endDate) || 'All time'),
+      custom: Boolean(startDate || endDate)
+    },
     daysRunning,
     allTime: {
       wasteSaved: Math.round(wasteSaved * 100) / 100,
-      total86: parseInt(allTime.rows[0]?.total_86 || 0),
+      total86: selectedIncidents,
       labourSaved$,
       totalSavings: Math.round(totalSavings * 100) / 100,
       annualised
     },
     last30: {
-      waste: last30WasteAfter,
-      incidents86: parseInt(last30.rows[0]?.incidents_86_30 || 0),
-      days: days30
+      waste: parseFloat(trailing30.rows[0]?.waste_30 || 0),
+      incidents86: parseInt(trailing30.rows[0]?.incidents_86_30 || 0, 10),
+      days: parseInt(trailing30.rows[0]?.days_30 || 0, 10)
     },
     last7: {
-      waste: parseFloat(last7.rows[0]?.waste_7 || 0),
-      incidents86: parseInt(last7.rows[0]?.incidents_86_7 || 0),
-      days: parseInt(last7.rows[0]?.days_7 || 0)
+      waste: parseFloat(trailing7.rows[0]?.waste_7 || 0),
+      incidents86: parseInt(trailing7.rows[0]?.incidents_86_7 || 0, 10),
+      days: parseInt(trailing7.rows[0]?.days_7 || 0, 10)
     },
     baseline: { avgDailyWaste: Math.round(baselineWaste * 100) / 100 },
     avgDailyWasteAfter: Math.round(avgDailyAfter * 100) / 100,
     wasteReductionPct,
-    forecastAccuracy: Math.max(0, 100 - Math.round((parseInt(last30.rows[0]?.incidents_86_30 || 0) / Math.max(days30, 1)) * 100))
+    forecastAccuracy: Math.max(0, 100 - Math.round((selectedIncidents / Math.max(selectedDays, 1)) * 100)),
+    lifetime: {
+      daysRunning: parseInt(lifetime.rows[0]?.days || 0, 10),
+      totalWaste: parseFloat(lifetime.rows[0]?.total_waste || 0),
+      total86: parseInt(lifetime.rows[0]?.total_86 || 0, 10)
+    }
   };
 }
 
@@ -2100,16 +2200,32 @@ router.post('/cafes/:cafeId/forecast/generate', async (req, res) => {
 
 // ─── DAILY LOGS ───────────────────────────────────────────────────────────────
 router.get('/cafes/:cafeId/logs', async (req, res) => {
-  const { days = 30 } = req.query;
   try {
-    const result = await pool.query(`
-      SELECT * FROM daily_logs
-      WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '${parseInt(days)} days'
-      ORDER BY date DESC
-    `, [req.params.cafeId]);
+    const { startDate, endDate } = resolveDateRangeOptions(req.query);
+    let result;
+
+    if (startDate || endDate) {
+      const range = buildDateRangeClause(startDate, endDate);
+      result = await pool.query(
+        `SELECT * FROM daily_logs
+         WHERE cafe_id = $1${range.clause}
+         ORDER BY date DESC`,
+        [req.params.cafeId, ...range.values]
+      );
+    } else {
+      const parsedDays = Math.max(1, parseInt(req.query.days || '30', 10) || 30);
+      result = await pool.query(
+        `SELECT * FROM daily_logs
+         WHERE cafe_id = $1
+           AND date >= (CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day')
+         ORDER BY date DESC`,
+        [req.params.cafeId, parsedDays]
+      );
+    }
+
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -2132,12 +2248,11 @@ router.post('/cafes/:cafeId/logs', async (req, res) => {
 
 // ─── METRICS ──────────────────────────────────────────────────────────────────
 router.get('/cafes/:cafeId/metrics', async (req, res) => {
-  const cafeId = req.params.cafeId;
   try {
-    const metrics = await buildMetrics(cafeId);
+    const metrics = await buildMetrics(req.params.cafeId, resolveDateRangeOptions(req.query));
     res.json(metrics);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -2280,16 +2395,32 @@ router.post('/owner/cafes/:cafeId/forecast/generate', requireOwnerAuth, requireO
 });
 
 router.get('/owner/cafes/:cafeId/logs', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
-  const { days = 30 } = req.query;
   try {
-    const result = await pool.query(`
-      SELECT * FROM daily_logs
-      WHERE cafe_id = $1 AND date >= NOW() - INTERVAL '${parseInt(days, 10)} days'
-      ORDER BY date DESC
-    `, [req.params.cafeId]);
+    const { startDate, endDate } = resolveDateRangeOptions(req.query);
+    let result;
+
+    if (startDate || endDate) {
+      const range = buildDateRangeClause(startDate, endDate);
+      result = await pool.query(
+        `SELECT * FROM daily_logs
+         WHERE cafe_id = $1${range.clause}
+         ORDER BY date DESC`,
+        [req.params.cafeId, ...range.values]
+      );
+    } else {
+      const parsedDays = Math.max(1, parseInt(req.query.days || '30', 10) || 30);
+      result = await pool.query(
+        `SELECT * FROM daily_logs
+         WHERE cafe_id = $1
+           AND date >= (CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day')
+         ORDER BY date DESC`,
+        [req.params.cafeId, parsedDays]
+      );
+    }
+
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -2312,10 +2443,10 @@ router.post('/owner/cafes/:cafeId/logs', requireOwnerAuth, requireOwnerCafeAcces
 
 router.get('/owner/cafes/:cafeId/metrics', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
   try {
-    const metrics = await buildMetrics(req.params.cafeId);
+    const metrics = await buildMetrics(req.params.cafeId, resolveDateRangeOptions(req.query));
     res.json(metrics);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

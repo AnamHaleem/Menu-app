@@ -1,5 +1,140 @@
 import React from 'react';
 
+const DATE_INPUT_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit'
+});
+
+const DATE_LABEL_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric'
+});
+
+function clampDateInput(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
+}
+
+function shiftDate(value, days) {
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return '';
+  date.setDate(date.getDate() + days);
+  return DATE_INPUT_FORMATTER.format(date);
+}
+
+export function buildRelativeDateRange(days = 30, endDate = DATE_INPUT_FORMATTER.format(new Date())) {
+  const safeDays = Math.max(1, Number(days) || 30);
+  const safeEnd = clampDateInput(endDate) || DATE_INPUT_FORMATTER.format(new Date());
+
+  return {
+    startDate: shiftDate(safeEnd, -(safeDays - 1)),
+    endDate: safeEnd
+  };
+}
+
+export function formatDateRangeLabel(startDate, endDate) {
+  const safeStart = clampDateInput(startDate);
+  const safeEnd = clampDateInput(endDate);
+
+  if (!safeStart && !safeEnd) return 'All time';
+  if (safeStart && safeEnd) {
+    const start = new Date(`${safeStart}T12:00:00`);
+    const end = new Date(`${safeEnd}T12:00:00`);
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      return `${DATE_LABEL_FORMATTER.format(start)} – ${DATE_LABEL_FORMATTER.format(end)}`;
+    }
+  }
+  return safeStart || safeEnd || 'All time';
+}
+
+export function DateRangePicker({
+  value,
+  onChange,
+  className = '',
+  includeAllTime = true
+}) {
+  const current = value || { startDate: '', endDate: '' };
+  const presets = [
+    { label: '7D', value: buildRelativeDateRange(7) },
+    { label: '30D', value: buildRelativeDateRange(30) },
+    { label: '90D', value: buildRelativeDateRange(90) }
+  ];
+
+  const handleChange = (key, nextValue) => {
+    const normalizedValue = clampDateInput(nextValue);
+    const updated = { ...current, [key]: normalizedValue };
+
+    if (updated.startDate && updated.endDate && updated.startDate > updated.endDate) {
+      if (key === 'startDate') updated.endDate = updated.startDate;
+      if (key === 'endDate') updated.startDate = updated.endDate;
+    }
+
+    onChange?.(updated);
+  };
+
+  const isPresetActive = (preset) =>
+    preset.value.startDate === current.startDate && preset.value.endDate === current.endDate;
+
+  return (
+    <div className={`bg-white rounded-xl border border-gray-100 shadow-sm p-4 ${className}`}>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Analysis window</p>
+          <p className="text-sm font-medium text-gray-700 mt-1">{formatDateRangeLabel(current.startDate, current.endDate)}</p>
+        </div>
+
+        <div className="flex flex-col gap-3 md:flex-row md:items-end">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="block text-xs text-gray-400 mb-1">From</span>
+              <input
+                type="date"
+                value={current.startDate}
+                onChange={(event) => handleChange('startDate', event.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:border-navy-900"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs text-gray-400 mb-1">To</span>
+              <input
+                type="date"
+                value={current.endDate}
+                onChange={(event) => handleChange('endDate', event.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:border-navy-900"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {presets.map((preset) => (
+              <Button
+                key={preset.label}
+                size="sm"
+                variant={isPresetActive(preset) ? 'primary' : 'secondary'}
+                onClick={() => onChange?.(preset.value)}
+              >
+                {preset.label}
+              </Button>
+            ))}
+            {includeAllTime && (
+              <Button
+                size="sm"
+                variant={!current.startDate && !current.endDate ? 'primary' : 'secondary'}
+                onClick={() => onChange?.({ startDate: '', endDate: '' })}
+              >
+                All time
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MetricCard({ label, value, sub, color = 'text-navy-900' }) {
   return (
     <div className="bg-white rounded-xl border border-gray-100 p-5 flex flex-col gap-1 shadow-sm">

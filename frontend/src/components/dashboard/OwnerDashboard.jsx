@@ -5,7 +5,17 @@ import {
   LineElement, BarElement, Title, Tooltip, Legend, Filler
 } from 'chart.js';
 import { metricsApi, logsApi, weatherApi, forecastApi } from '../../lib/api';
-import { MetricCard, Spinner, SectionHeader, Button, Card, Badge } from '../shared';
+import {
+  MetricCard,
+  Spinner,
+  SectionHeader,
+  Button,
+  Card,
+  Badge,
+  DateRangePicker,
+  buildRelativeDateRange,
+  formatDateRangeLabel
+} from '../shared';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend, Filler);
 
@@ -25,14 +35,16 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
   const [forecast, setForecast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [dateRange, setDateRange] = useState(() => buildRelativeDateRange(30));
   const [logForm, setLogForm] = useState({ waste_value: '', items_86d: '', actual_covers: '', notes: '' });
   const [showLogForm, setShowLogForm] = useState(false);
 
   useEffect(() => {
     if (!cafeId) return;
+    setLoading(true);
     Promise.all([
-      metricsClient.get(cafeId),
-      logsClient.get(cafeId, 42),
+      metricsClient.get(cafeId, dateRange),
+      logsClient.get(cafeId, dateRange),
       weatherClient.get('Toronto'),
       forecastClient.get(cafeId, new Date().toISOString().split('T')[0])
     ]).then(([m, l, w, f]) => {
@@ -41,7 +53,7 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
       setWeather(w);
       setForecast(f);
     }).finally(() => setLoading(false));
-  }, [cafeId, metricsClient, logsClient, weatherClient, forecastClient]);
+  }, [cafeId, metricsClient, logsClient, weatherClient, forecastClient, dateRange.startDate, dateRange.endDate]);
 
   const handleSendPrepList = async () => {
     setSending(true);
@@ -60,8 +72,8 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
   const handleLogSubmit = async () => {
     const today = new Date().toISOString().split('T')[0];
     await logsClient.create(cafeId, { date: today, ...logForm });
-    const updated = await logsClient.get(cafeId, 42);
-    const updatedMetrics = await metricsClient.get(cafeId);
+    const updated = await logsClient.get(cafeId, dateRange);
+    const updatedMetrics = await metricsClient.get(cafeId, dateRange);
     setLogs(updated);
     setMetrics(updatedMetrics);
     setShowLogForm(false);
@@ -121,6 +133,7 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
     .filter((item) => item.samples > 0)
     .sort((a, b) => Math.abs(b.multiplier - 1) - Math.abs(a.multiplier - 1))
     .slice(0, 6);
+  const analysisLabel = metrics?.range?.label || formatDateRangeLabel(dateRange.startDate, dateRange.endDate);
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
@@ -143,6 +156,8 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
           </Button>
         </div>
       </div>
+
+      <DateRangePicker value={dateRange} onChange={setDateRange} className="mb-6" />
 
       {/* Daily log form */}
       {showLogForm && (
@@ -178,30 +193,30 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
         <>
           <div className="grid grid-cols-2 md:grid-cols-2 gap-4 mb-4">
             <div className="col-span-2 md:col-span-1 bg-navy-900 text-white rounded-xl p-6">
-              <p className="text-xs text-blue-200 uppercase tracking-wide font-medium mb-2">Total savings since going live</p>
+              <p className="text-xs text-blue-200 uppercase tracking-wide font-medium mb-2">Savings in selected range</p>
               <p className="text-5xl font-semibold">{fmt$(metrics.allTime.totalSavings)}</p>
-              <p className="text-sm text-blue-200 mt-2">Projected annual: <strong className="text-white">{fmt$(metrics.allTime.annualised)}</strong></p>
+              <p className="text-sm text-blue-200 mt-2">Window: <strong className="text-white">{analysisLabel}</strong></p>
             </div>
             <div className="col-span-2 md:col-span-1 bg-teal-600 text-white rounded-xl p-6">
-              <p className="text-xs text-green-100 uppercase tracking-wide font-medium mb-2">Forecast accuracy (30-day)</p>
+              <p className="text-xs text-green-100 uppercase tracking-wide font-medium mb-2">Forecast accuracy</p>
               <p className="text-5xl font-semibold">{fmtPct(metrics.forecastAccuracy)}</p>
-              <p className="text-sm text-green-100 mt-2">Days running: <strong className="text-white">{metrics.daysRunning}</strong></p>
+              <p className="text-sm text-green-100 mt-2">Logged days: <strong className="text-white">{metrics.daysRunning}</strong></p>
             </div>
           </div>
 
           {/* Secondary metrics */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <MetricCard label="Waste saved all time" value={fmt$(metrics.allTime.wasteSaved)} sub="vs projected without system" color="text-teal-600" />
-            <MetricCard label="Waste saved this month" value={fmt$(metrics.last30.waste)} sub="last 30 days" />
-            <MetricCard label="86 incidents all time" value={metrics.allTime.total86} sub={metrics.allTime.total86 === 0 ? 'Zero incidents' : 'trending down'} color={metrics.allTime.total86 === 0 ? 'text-teal-600' : 'text-red-500'} />
-            <MetricCard label="Labour saved" value={fmt$(metrics.allTime['labourSaved$'])} sub="at $21/hr kitchen lead rate" color="text-teal-600" />
+            <MetricCard label="Waste saved" value={fmt$(metrics.allTime.wasteSaved)} sub={analysisLabel} color="text-teal-600" />
+            <MetricCard label="Waste recorded" value={fmt$(metrics.last30.waste)} sub="trailing 30 days to end date" />
+            <MetricCard label="86 incidents" value={metrics.allTime.total86} sub={metrics.allTime.total86 === 0 ? 'Zero incidents' : analysisLabel} color={metrics.allTime.total86 === 0 ? 'text-teal-600' : 'text-red-500'} />
+            <MetricCard label="Labour saved" value={fmt$(metrics.allTime['labourSaved$'])} sub="estimated within selected range" color="text-teal-600" />
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <MetricCard label="Avg daily waste before" value={fmt$(metrics.baseline.avgDailyWaste)} sub="week 1 baseline" />
-            <MetricCard label="Avg daily waste after" value={fmt$(metrics.avgDailyWasteAfter)} sub="post-system average" />
-            <MetricCard label="Waste reduction" value={fmtPct(metrics.wasteReductionPct)} sub="vs week 1 baseline" color="text-teal-600" />
-            <MetricCard label="86 incidents this month" value={metrics.last30.incidents86} sub="last 30 days" color={metrics.last30.incidents86 === 0 ? 'text-teal-600' : 'text-red-500'} />
+            <MetricCard label="Baseline avg waste" value={fmt$(metrics.baseline.avgDailyWaste)} sub="first 7 logged days in range" />
+            <MetricCard label="Avg daily waste" value={fmt$(metrics.avgDailyWasteAfter)} sub={analysisLabel} />
+            <MetricCard label="Waste reduction" value={fmtPct(metrics.wasteReductionPct)} sub="vs baseline avg" color="text-teal-600" />
+            <MetricCard label="86 incidents (30d)" value={metrics.last30.incidents86} sub="rolling window to end date" color={metrics.last30.incidents86 === 0 ? 'text-teal-600' : 'text-red-500'} />
           </div>
 
           {forecast?.learning && (
@@ -288,7 +303,7 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
       {/* Recent log table */}
       <Card>
         <div className="p-5 border-b border-gray-50">
-          <SectionHeader title="Daily log — last 14 days" />
+          <SectionHeader title={`Daily log — ${analysisLabel}`} />
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
