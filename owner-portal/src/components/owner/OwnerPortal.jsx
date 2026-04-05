@@ -146,6 +146,13 @@ export default function OwnerPortal() {
   }, [selectedCafeId]);
 
   const cafes = owner?.cafes || [];
+  const ownerDisplayName = [
+    String(owner?.profile?.first_name || '').trim(),
+    String(owner?.profile?.last_name || '').trim()
+  ].filter(Boolean).join(' ')
+    || String(owner?.profile?.full_name || '').trim()
+    || owner?.email
+    || 'Owner';
   const selectedCafe = useMemo(() => {
     if (!cafes.length) return null;
     return cafes.find((cafe) => cafe.id === selectedCafeId) || cafes[0];
@@ -482,7 +489,7 @@ export default function OwnerPortal() {
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
             <p className="text-sm text-gray-400">Signed in as</p>
-            <p className="text-sm font-medium text-gray-900">{owner.email}</p>
+            <p className="text-sm font-medium text-gray-900">{ownerDisplayName}</p>
           </div>
 
           <div className="flex items-center gap-2">
