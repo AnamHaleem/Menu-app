@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
 const forecastService = require('../services/forecastService');
+const mlFeatureService = require('../services/mlFeatureService');
 const weatherService = require('../services/weatherService');
 const emailService = require('../services/emailService');
 const smsService = require('../services/smsService');
@@ -1765,6 +1766,107 @@ router.get('/admin/hq', async (req, res) => {
       selectedCafeId
     });
     res.json(snapshot);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/ml/feature-store/summary', async (req, res) => {
+  try {
+    const cafeId = req.query.cafeId ? parseInt(req.query.cafeId, 10) : null;
+    if (req.query.cafeId && Number.isNaN(cafeId)) {
+      return res.status(400).json({ error: 'cafeId must be a valid number' });
+    }
+
+    const summary = await mlFeatureService.getFeatureStoreSummary({
+      cafeId,
+      ...resolveDateRangeOptions(req.query)
+    });
+    res.json(summary);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ml/feature-store/rebuild', async (req, res) => {
+  try {
+    const rawCafeId = req.body?.cafeId ?? req.query?.cafeId ?? null;
+    const cafeId = rawCafeId === null || rawCafeId === '' ? null : parseInt(rawCafeId, 10);
+    if (rawCafeId !== null && rawCafeId !== '' && Number.isNaN(cafeId)) {
+      return res.status(400).json({ error: 'cafeId must be a valid number' });
+    }
+
+    const startDate = normalizeIsoDate(req.body?.startDate || req.query?.startDate);
+    const endDate = normalizeIsoDate(req.body?.endDate || req.query?.endDate);
+    if ((req.body?.startDate || req.query?.startDate) && !startDate) {
+      return res.status(400).json({ error: 'startDate must be a valid YYYY-MM-DD value' });
+    }
+    if ((req.body?.endDate || req.query?.endDate) && !endDate) {
+      return res.status(400).json({ error: 'endDate must be a valid YYYY-MM-DD value' });
+    }
+    if (startDate && endDate && startDate > endDate) {
+      return res.status(400).json({ error: 'startDate cannot be after endDate' });
+    }
+
+    const actorEmail = getAdminActorEmail(req);
+    const result = await mlFeatureService.buildFeatureStore({
+      cafeId,
+      startDate,
+      endDate,
+      requestedBy: actorEmail || 'admin',
+      source: 'admin_portal'
+    });
+
+    await writeAdminAuditEvent({
+      eventType: 'ml.feature_store.rebuild',
+      severity: 'medium',
+      cafeId,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `ML feature store rebuilt${cafeId ? ` for cafe ${cafeId}` : ' across active cafes'}`,
+      details: result
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/ml/feature-store', async (req, res) => {
+  try {
+    const cafeId = req.query.cafeId ? parseInt(req.query.cafeId, 10) : null;
+    if (req.query.cafeId && Number.isNaN(cafeId)) {
+      return res.status(400).json({ error: 'cafeId must be a valid number' });
+    }
+
+    const rows = await mlFeatureService.listFeatureRows({
+      cafeId,
+      ...resolveDateRangeOptions(req.query),
+      limit: req.query.limit
+    });
+    res.json(rows);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/ml/feature-store/export.csv', async (req, res) => {
+  try {
+    const cafeId = req.query.cafeId ? parseInt(req.query.cafeId, 10) : null;
+    if (req.query.cafeId && Number.isNaN(cafeId)) {
+      return res.status(400).json({ error: 'cafeId must be a valid number' });
+    }
+
+    const csv = await mlFeatureService.exportFeatureRowsCsv({
+      cafeId,
+      ...resolveDateRangeOptions(req.query),
+      limit: req.query.limit
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="ml-feature-store.csv"');
+    res.send(csv);
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }

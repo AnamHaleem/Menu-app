@@ -502,6 +502,145 @@ const migrate = async () => {
       ON item_learning_state (cafe_id, item_id);
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ml_model_versions (
+        id SERIAL PRIMARY KEY,
+        model_key VARCHAR(120) NOT NULL UNIQUE,
+        display_name VARCHAR(255) NOT NULL,
+        model_family VARCHAR(120) NOT NULL DEFAULT 'baseline',
+        status VARCHAR(32) NOT NULL DEFAULT 'draft',
+        feature_spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+        metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+        notes TEXT,
+        trained_range_start DATE,
+        trained_range_end DATE,
+        training_rows INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT NOW(),
+        activated_at TIMESTAMP
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ml_model_versions_status
+      ON ml_model_versions (status);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ml_training_runs (
+        id SERIAL PRIMARY KEY,
+        model_version_id INTEGER REFERENCES ml_model_versions(id) ON DELETE SET NULL,
+        cafe_id INTEGER REFERENCES cafes(id) ON DELETE SET NULL,
+        requested_by VARCHAR(255),
+        source VARCHAR(80) NOT NULL DEFAULT 'manual_api',
+        run_type VARCHAR(80) NOT NULL DEFAULT 'feature_build',
+        status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        range_start DATE,
+        range_end DATE,
+        feature_rows_built INTEGER NOT NULL DEFAULT 0,
+        cafes_processed INTEGER NOT NULL DEFAULT 0,
+        items_processed INTEGER NOT NULL DEFAULT 0,
+        predictions_written INTEGER NOT NULL DEFAULT 0,
+        config JSONB NOT NULL DEFAULT '{}'::jsonb,
+        metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+        error_message TEXT,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ml_training_runs_created_at
+      ON ml_training_runs (created_at DESC);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ml_training_runs_cafe_id
+      ON ml_training_runs (cafe_id);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ml_daily_features (
+        id SERIAL PRIMARY KEY,
+        cafe_id INTEGER NOT NULL REFERENCES cafes(id) ON DELETE CASCADE,
+        feature_date DATE NOT NULL,
+        item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        item_name VARCHAR(255) NOT NULL,
+        item_category VARCHAR(120),
+        actual_qty DECIMAL(12,4) NOT NULL DEFAULT 0,
+        revenue DECIMAL(12,4) NOT NULL DEFAULT 0,
+        tx_count INTEGER NOT NULL DEFAULT 0,
+        avg_price DECIMAL(12,4) NOT NULL DEFAULT 0,
+        lag_qty_1d DECIMAL(12,4) NOT NULL DEFAULT 0,
+        lag_qty_7d DECIMAL(12,4) NOT NULL DEFAULT 0,
+        avg_qty_7d DECIMAL(12,4) NOT NULL DEFAULT 0,
+        avg_qty_14d DECIMAL(12,4) NOT NULL DEFAULT 0,
+        avg_qty_28d DECIMAL(12,4) NOT NULL DEFAULT 0,
+        avg_qty_same_weekday_4w DECIMAL(12,4) NOT NULL DEFAULT 0,
+        rolling_revenue_7d DECIMAL(12,4) NOT NULL DEFAULT 0,
+        day_of_week INTEGER NOT NULL,
+        iso_week INTEGER NOT NULL,
+        month_of_year INTEGER NOT NULL,
+        is_weekend BOOLEAN NOT NULL DEFAULT false,
+        is_holiday BOOLEAN NOT NULL DEFAULT false,
+        holiday_name VARCHAR(255),
+        weather_condition VARCHAR(100),
+        temp_c DECIMAL(8,4),
+        weather_bucket VARCHAR(80),
+        learning_multiplier DECIMAL(12,4) NOT NULL DEFAULT 1,
+        learning_samples INTEGER NOT NULL DEFAULT 0,
+        ai_recent_7d_rate DECIMAL(12,4) NOT NULL DEFAULT 0,
+        prep_days_last_7d INTEGER NOT NULL DEFAULT 0,
+        waste_value_last_7d DECIMAL(12,4) NOT NULL DEFAULT 0,
+        items_86_last_7d INTEGER NOT NULL DEFAULT 0,
+        stockout_flag BOOLEAN NOT NULL DEFAULT false,
+        latest_forecast_qty DECIMAL(12,4),
+        latest_base_forecast_qty DECIMAL(12,4),
+        source_window_start DATE,
+        source_window_end DATE,
+        feature_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(cafe_id, feature_date, item_id)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ml_daily_features_cafe_date
+      ON ml_daily_features (cafe_id, feature_date DESC);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ml_daily_features_item_date
+      ON ml_daily_features (item_id, feature_date DESC);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ml_predictions (
+        id SERIAL PRIMARY KEY,
+        model_version_id INTEGER REFERENCES ml_model_versions(id) ON DELETE CASCADE,
+        training_run_id INTEGER REFERENCES ml_training_runs(id) ON DELETE SET NULL,
+        cafe_id INTEGER NOT NULL REFERENCES cafes(id) ON DELETE CASCADE,
+        prediction_date DATE NOT NULL,
+        item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        predicted_qty DECIMAL(12,4) NOT NULL DEFAULT 0,
+        lower_bound_qty DECIMAL(12,4),
+        upper_bound_qty DECIMAL(12,4),
+        confidence_score DECIMAL(8,4),
+        source VARCHAR(80) NOT NULL DEFAULT 'shadow',
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(model_version_id, cafe_id, prediction_date, item_id)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ml_predictions_cafe_date
+      ON ml_predictions (cafe_id, prediction_date DESC);
+    `);
+
     await client.query('COMMIT');
     console.log('Migration completed successfully');
   } catch (err) {
