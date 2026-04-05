@@ -46,6 +46,44 @@ const formatRangeDateLabel = (value) => {
     year: 'numeric'
   });
 };
+const isoDateFromDate = (date) => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return date.toISOString().split('T')[0];
+};
+const shiftIsoDate = (value, days) => {
+  const normalized = normalizeIsoDate(value);
+  if (!normalized) return null;
+  const date = new Date(`${normalized}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setDate(date.getDate() + days);
+  return isoDateFromDate(date);
+};
+const buildDefaultDateRange = (days = 30) => {
+  const endDate = isoDateFromDate(new Date());
+  const safeDays = Math.max(1, Number(days) || 30);
+  return {
+    startDate: shiftIsoDate(endDate, -(safeDays - 1)),
+    endDate
+  };
+};
+const buildPreviousDateRange = (startDate, endDate) => {
+  const safeStart = normalizeIsoDate(startDate);
+  const safeEnd = normalizeIsoDate(endDate);
+  if (!safeStart || !safeEnd) return null;
+
+  const start = new Date(`${safeStart}T12:00:00`);
+  const end = new Date(`${safeEnd}T12:00:00`);
+  const diffMs = end.getTime() - start.getTime();
+  if (Number.isNaN(diffMs) || diffMs < 0) return null;
+
+  const spanDays = Math.floor(diffMs / 86400000) + 1;
+  const previousEnd = shiftIsoDate(safeStart, -1);
+  const previousStart = shiftIsoDate(previousEnd, -(spanDays - 1));
+
+  return previousStart && previousEnd
+    ? { startDate: previousStart, endDate: previousEnd, spanDays }
+    : null;
+};
 const resolveDateRangeOptions = (query = {}) => {
   const rawStartDate = String(query.startDate || '').trim();
   const rawEndDate = String(query.endDate || '').trim();
@@ -756,6 +794,241 @@ async function buildPrepSummary(cafeId, date) {
       onTargetCount: Math.max(0, withActuals - overPreppedCount - underPreppedCount)
     },
     items
+  };
+}
+
+function aggregatePrepAnalyticsRows(cafeId, rows, startDate, endDate) {
+  const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
+  const varianceTolerance = 0.05;
+  const stationMap = new Map();
+  const dailyMap = new Map();
+  const exportRows = [];
+
+  let itemCount = 0;
+  let completedCount = 0;
+  let actualCaptureCount = 0;
+  let onTargetCount = 0;
+  let overPreppedCount = 0;
+  let underPreppedCount = 0;
+  let totalNetQty = 0;
+  let totalActualQty = 0;
+  let absoluteVarianceTotal = 0;
+
+  for (const row of rows) {
+    const dateKey = row.date instanceof Date ? isoDateFromDate(row.date) : normalizeIsoDate(row.date);
+    const station = row.station || 'Other';
+    const unit = row.unit || '';
+    const netQty = toNumberOrZero(row.net_quantity ?? row.quantity_needed);
+    const forecastQty = toNumberOrZero(row.forecast_quantity ?? row.quantity_needed);
+    const onHandQty = toNumberOrZero(row.on_hand_quantity);
+    const completed = Boolean(row.completed);
+    const actualRaw = row.actual_prepped_quantity;
+    const hasActual = !(actualRaw === null || actualRaw === undefined);
+    const actualQty = hasActual ? toNumberOrZero(actualRaw) : null;
+    const varianceQty = hasActual ? round2(actualQty - netQty) : null;
+
+    itemCount += 1;
+    totalNetQty += netQty;
+    if (completed) completedCount += 1;
+    if (hasActual) {
+      actualCaptureCount += 1;
+      totalActualQty += actualQty;
+      absoluteVarianceTotal += Math.abs(varianceQty);
+      if (varianceQty > varianceTolerance) overPreppedCount += 1;
+      else if (varianceQty < -varianceTolerance) underPreppedCount += 1;
+      else onTargetCount += 1;
+    }
+
+    if (!stationMap.has(station)) {
+      stationMap.set(station, {
+        station,
+        itemCount: 0,
+        completedCount: 0,
+        actualCaptureCount: 0,
+        onTargetCount: 0,
+        overPreppedCount: 0,
+        underPreppedCount: 0
+      });
+    }
+
+    if (!dailyMap.has(dateKey)) {
+      dailyMap.set(dateKey, {
+        date: dateKey,
+        itemCount: 0,
+        completedCount: 0,
+        actualCaptureCount: 0,
+        onTargetCount: 0,
+        overPreppedCount: 0,
+        underPreppedCount: 0
+      });
+    }
+
+    const stationSummary = stationMap.get(station);
+    stationSummary.itemCount += 1;
+    if (completed) stationSummary.completedCount += 1;
+    if (hasActual) {
+      stationSummary.actualCaptureCount += 1;
+      if (varianceQty > varianceTolerance) stationSummary.overPreppedCount += 1;
+      else if (varianceQty < -varianceTolerance) stationSummary.underPreppedCount += 1;
+      else stationSummary.onTargetCount += 1;
+    }
+
+    const daySummary = dailyMap.get(dateKey);
+    daySummary.itemCount += 1;
+    if (completed) daySummary.completedCount += 1;
+    if (hasActual) {
+      daySummary.actualCaptureCount += 1;
+      if (varianceQty > varianceTolerance) daySummary.overPreppedCount += 1;
+      else if (varianceQty < -varianceTolerance) daySummary.underPreppedCount += 1;
+      else daySummary.onTargetCount += 1;
+    }
+
+    exportRows.push({
+      date: dateKey,
+      station,
+      ingredientName: row.ingredient_name,
+      forecastQty: round2(forecastQty),
+      onHandQty: round2(onHandQty),
+      netQty: round2(netQty),
+      actualQty: hasActual ? round2(actualQty) : null,
+      varianceQty,
+      completed,
+      unit
+    });
+  }
+
+  const prepDays = dailyMap.size;
+  const previousLabel = formatRangeDateLabel(startDate) && formatRangeDateLabel(endDate)
+    ? `${formatRangeDateLabel(startDate)} – ${formatRangeDateLabel(endDate)}`
+    : (formatRangeDateLabel(startDate) || formatRangeDateLabel(endDate) || 'Selected range');
+
+  return {
+    cafeId,
+    range: {
+      startDate,
+      endDate,
+      label: previousLabel
+    },
+    overview: {
+      itemCount,
+      prepDays,
+      completedCount,
+      completionRate: itemCount ? round2((completedCount / itemCount) * 100) : 0,
+      actualCaptureCount,
+      actualCaptureRate: itemCount ? round2((actualCaptureCount / itemCount) * 100) : 0,
+      onTargetCount,
+      onTargetRate: actualCaptureCount ? round2((onTargetCount / actualCaptureCount) * 100) : 0,
+      overPreppedCount,
+      underPreppedCount,
+      totalNetQty: round2(totalNetQty),
+      totalActualQty: round2(totalActualQty),
+      avgAbsoluteVarianceQty: actualCaptureCount ? round2(absoluteVarianceTotal / actualCaptureCount) : 0
+    },
+    stationBreakdown: [...stationMap.values()]
+      .map((entry) => ({
+        ...entry,
+        completionRate: entry.itemCount ? round2((entry.completedCount / entry.itemCount) * 100) : 0,
+        actualCaptureRate: entry.itemCount ? round2((entry.actualCaptureCount / entry.itemCount) * 100) : 0,
+        onTargetRate: entry.actualCaptureCount ? round2((entry.onTargetCount / entry.actualCaptureCount) * 100) : 0
+      }))
+      .sort((a, b) => a.station.localeCompare(b.station)),
+    dailyBreakdown: [...dailyMap.values()].sort((a, b) => String(a.date).localeCompare(String(b.date))),
+    topVarianceRows: exportRows
+      .filter((row) => row.actualQty !== null)
+      .sort((a, b) => Math.abs(b.varianceQty || 0) - Math.abs(a.varianceQty || 0))
+      .slice(0, 10),
+    rows: exportRows
+  };
+}
+
+function buildPrepAnalyticsComparison(currentOverview, previousOverview) {
+  if (!previousOverview) return null;
+
+  const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
+  return {
+    completionRateDelta: round2(currentOverview.completionRate - previousOverview.completionRate),
+    actualCaptureRateDelta: round2(currentOverview.actualCaptureRate - previousOverview.actualCaptureRate),
+    onTargetRateDelta: round2(currentOverview.onTargetRate - previousOverview.onTargetRate),
+    prepDaysDelta: round2(currentOverview.prepDays - previousOverview.prepDays),
+    overPreppedDelta: round2(currentOverview.overPreppedCount - previousOverview.overPreppedCount),
+    underPreppedDelta: round2(currentOverview.underPreppedCount - previousOverview.underPreppedCount)
+  };
+}
+
+async function buildPrepAnalytics(cafeId, options = {}) {
+  const requestedRange = options.startDate && options.endDate
+    ? { startDate: options.startDate, endDate: options.endDate }
+    : buildDefaultDateRange(30);
+
+  const currentRange = {
+    startDate: normalizeIsoDate(requestedRange.startDate),
+    endDate: normalizeIsoDate(requestedRange.endDate)
+  };
+
+  const currentRowsResult = await pool.query(
+    `SELECT
+       date,
+       station,
+       ingredient_name,
+       quantity_needed,
+       forecast_quantity,
+       on_hand_quantity,
+       net_quantity,
+       actual_prepped_quantity,
+       completed,
+       unit
+     FROM prep_lists
+     WHERE cafe_id = $1
+       AND date >= $2::date
+       AND date <= $3::date
+     ORDER BY date DESC, station, ingredient_name`,
+    [cafeId, currentRange.startDate, currentRange.endDate]
+  );
+
+  const current = aggregatePrepAnalyticsRows(
+    cafeId,
+    currentRowsResult.rows,
+    currentRange.startDate,
+    currentRange.endDate
+  );
+
+  const previousRange = buildPreviousDateRange(currentRange.startDate, currentRange.endDate);
+  let previous = null;
+
+  if (previousRange) {
+    const previousRowsResult = await pool.query(
+      `SELECT
+         date,
+         station,
+         ingredient_name,
+         quantity_needed,
+         forecast_quantity,
+         on_hand_quantity,
+         net_quantity,
+         actual_prepped_quantity,
+         completed,
+         unit
+       FROM prep_lists
+       WHERE cafe_id = $1
+         AND date >= $2::date
+         AND date <= $3::date
+       ORDER BY date DESC, station, ingredient_name`,
+      [cafeId, previousRange.startDate, previousRange.endDate]
+    );
+
+    previous = aggregatePrepAnalyticsRows(
+      cafeId,
+      previousRowsResult.rows,
+      previousRange.startDate,
+      previousRange.endDate
+    );
+  }
+
+  return {
+    ...current,
+    previousRange: previous?.range || null,
+    previousOverview: previous?.overview || null,
+    comparison: buildPrepAnalyticsComparison(current.overview, previous?.overview || null)
   };
 }
 
@@ -2185,6 +2458,16 @@ router.get('/cafes/:cafeId/prep-summary', async (req, res) => {
   }
 });
 
+router.get('/cafes/:cafeId/prep-analytics', async (req, res) => {
+  try {
+    const requestedRange = resolveDateRangeOptions(req.query);
+    const analytics = await buildPrepAnalytics(parseInt(req.params.cafeId, 10), requestedRange);
+    res.json(analytics);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 router.post('/cafes/:cafeId/forecast/generate', async (req, res) => {
   const date = req.body.date || new Date().toISOString().split('T')[0];
   try {
@@ -2378,6 +2661,16 @@ router.get('/owner/cafes/:cafeId/prep-summary', requireOwnerAuth, requireOwnerCa
     res.json(summary);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/owner/cafes/:cafeId/prep-analytics', requireOwnerAuth, requireOwnerCafeAccess, async (req, res) => {
+  try {
+    const requestedRange = resolveDateRangeOptions(req.query);
+    const analytics = await buildPrepAnalytics(parseInt(req.params.cafeId, 10), requestedRange);
+    res.json(analytics);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

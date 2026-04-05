@@ -105,6 +105,10 @@ export const prepSummaryApi = {
   get: (cafeId, date) => api.get(`/cafes/${cafeId}/prep-summary`, { params: { date } }).then(r => r.data)
 };
 
+export const prepAnalyticsApi = {
+  get: (cafeId, options = {}) => api.get(`/cafes/${cafeId}/prep-analytics`, { params: buildQueryParams(options) }).then(r => r.data)
+};
+
 export const metricsApi = {
   get: (cafeId, options = {}) => api.get(`/cafes/${cafeId}/metrics`, { params: buildQueryParams(options) }).then(r => r.data)
 };
@@ -187,6 +191,10 @@ export const ownerPortalApi = {
   },
   prepSummary: {
     get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/prep-summary`, { params: { date } }).then(r => r.data)
+  },
+  prepAnalytics: {
+    get: (cafeId, options = {}) =>
+      ownerApi.get(`/owner/cafes/${cafeId}/prep-analytics`, { params: buildQueryParams(options) }).then(r => r.data)
   }
 };
 

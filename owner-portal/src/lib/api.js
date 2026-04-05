@@ -133,6 +133,10 @@ export const ownerPortalApi = {
   prepSummary: {
     get: (cafeId, date) => ownerApi.get(`/owner/cafes/${cafeId}/prep-summary`, { params: { date } }).then((response) => response.data)
   },
+  prepAnalytics: {
+    get: (cafeId, options = {}) =>
+      ownerApi.get(`/owner/cafes/${cafeId}/prep-analytics`, { params: buildQueryParams(options) }).then((response) => response.data)
+  },
   weather: weatherApi
 };
 
@@ -142,5 +146,6 @@ export const logsApi = ownerPortalApi.logs;
 export const forecastApi = ownerPortalApi.forecast;
 export const prepListApi = ownerPortalApi.prepList;
 export const prepSummaryApi = ownerPortalApi.prepSummary;
+export const prepAnalyticsApi = ownerPortalApi.prepAnalytics;
 
 export default publicApi;
