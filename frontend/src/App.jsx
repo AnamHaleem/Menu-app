@@ -115,7 +115,7 @@ function ShellNavLink({ to, label, icon: Icon, collapsed }) {
   );
 }
 
-function AdminSidebar({ cafe, authEnabled, collapsed, onToggle }) {
+function AdminSidebar({ authEnabled, collapsed, onToggle }) {
   const navItems = [
     { to: '/dashboard', label: 'Fleet HQ', icon: DashboardIcon },
     { to: '/kitchen', label: 'Cafe Ops', icon: PrepIcon },
@@ -124,11 +124,25 @@ function AdminSidebar({ cafe, authEnabled, collapsed, onToggle }) {
 
   return (
     <aside className={[
-      'bg-white border border-slate-200 rounded-[30px] p-4 flex flex-col gap-4 shrink-0 shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
+      'relative overflow-visible bg-white border border-slate-200 rounded-[30px] p-4 flex flex-col gap-4 shrink-0 shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
       collapsed ? 'lg:w-[108px]' : 'lg:w-[290px]',
       'w-full lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)]'
     ].join(' ')}>
-      <div className="flex items-center justify-between gap-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        className={[
+          'hidden lg:flex absolute top-6 h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-400 hover:text-slate-700 hover:bg-white transition-colors shadow-[0_1px_2px_rgba(15,23,42,0.06)]',
+          collapsed ? 'lg:-right-4' : 'lg:right-5'
+        ].join(' ')}
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-4 h-4 transition-transform ${collapsed ? 'rotate-180' : ''}`}>
+          <path d="m15 18-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      <div className={['flex items-center min-w-0', collapsed ? 'lg:justify-center lg:min-h-[52px]' : 'justify-between gap-3 pr-12'].join(' ')}>
         <div className={['flex items-center gap-3 min-w-0', collapsed ? 'lg:justify-center lg:w-full' : ''].join(' ')}>
           <BrandMark />
           <div className={collapsed ? 'lg:hidden' : ''}>
@@ -136,17 +150,6 @@ function AdminSidebar({ cafe, authEnabled, collapsed, onToggle }) {
             <p className="text-sm text-slate-400 mt-1">Admin console</p>
           </div>
         </div>
-
-        <button
-          type="button"
-          onClick={onToggle}
-          className="hidden lg:flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-400 hover:text-slate-700 hover:bg-white transition-colors"
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-4 h-4 transition-transform ${collapsed ? 'rotate-180' : ''}`}>
-            <path d="m15 18-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
       </div>
 
       <div className="h-px bg-slate-100" />
@@ -171,8 +174,8 @@ function AdminSidebar({ cafe, authEnabled, collapsed, onToggle }) {
       <div className="mt-auto pt-4 border-t border-slate-100 flex items-center gap-3">
         <div className="w-11 h-11 rounded-2xl bg-slate-950 text-white flex items-center justify-center text-sm font-bold">M</div>
         <div className={collapsed ? 'lg:hidden' : 'min-w-0'}>
-          <p className="text-sm font-semibold text-slate-900 truncate">{cafe?.name || 'No cafe selected'}</p>
-          <p className="text-xs text-slate-400 truncate">{authEnabled ? 'Protected workspace' : 'Guest mode'}</p>
+          <p className="text-sm font-semibold text-slate-900 truncate">Admin workspace</p>
+          <p className="text-xs text-slate-400 truncate">{authEnabled ? 'Fleet + support tools' : 'Guest mode'}</p>
         </div>
       </div>
     </aside>
@@ -184,7 +187,7 @@ function pageMetaForPath(pathname) {
       return {
         eyebrow: 'Operations',
       title: 'Cafe Operations',
-      subtitle: 'Jump into a selected cafe’s prep execution, actuals, and today’s kitchen view.'
+      subtitle: 'Run one cafe’s execution workspace: prep, actuals, and learning feedback.'
     };
   }
 
@@ -222,6 +225,7 @@ function NoCafeState() {
 function ShellHeader({ cafe, authEnabled }) {
   const location = useLocation();
   const meta = pageMetaForPath(location.pathname);
+  const showCafeChip = location.pathname.includes('/kitchen');
 
   return (
     <Card className="px-6 py-5">
@@ -233,7 +237,7 @@ function ShellHeader({ cafe, authEnabled }) {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap xl:justify-end">
-          {cafe && (
+          {showCafeChip && cafe && (
             <div className="inline-flex items-center rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700">
               {cafe.name}
             </div>
@@ -269,7 +273,6 @@ function AppShell({ cafe, authEnabled, onCafeChange }) {
     <div className="min-h-screen bg-[#edf2f7] p-4 md:p-5">
       <div className="max-w-[1600px] mx-auto flex flex-col lg:flex-row gap-5">
         <AdminSidebar
-          cafe={cafe}
           authEnabled={authEnabled}
           collapsed={collapsed}
           onToggle={() => setCollapsed((prev) => !prev)}
@@ -307,7 +310,7 @@ function AppContent({ authEnabled }) {
 
     async function loadCafe() {
       try {
-        const cafes = await cafesApi.getAll();
+        const cafes = await cafesApi.getAll({ includeInactive: true });
         if (!cafes.length) return;
 
         const storedCafeId = getStoredCafeId();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { cafesApi, itemsApi, ingredientsApi, recipesApi, metricsApi, adminOwnersApi } from '../../lib/api';
 import {
   Spinner,
@@ -864,6 +864,7 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
   const [loading, setLoading] = useState(true);
   const [showAddCafe, setShowAddCafe] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
   const [dateRange, setDateRange] = useState(() => buildRelativeDateRange(30));
 
   const broadcastCafeSelection = (cafe) => {
@@ -890,80 +891,87 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
     window.dispatchEvent(new Event('menu:cafe-selected'));
   };
 
+  const loadCafes = useCallback(async (options = {}) => {
+    const { preferredCafeId = null } = options;
+    const data = await cafesApi.getAll({ includeInactive: true });
+    setLoadError('');
+    setCafes(data);
+
+    if (!data.length) {
+      broadcastCafeSelection(null);
+      return [];
+    }
+
+    let defaultCafe = data[0];
+
+    if (preferredCafeId) {
+      const preferredCafe = data.find((cafe) => cafe.id === preferredCafeId);
+      if (preferredCafe) defaultCafe = preferredCafe;
+    }
+
+    if (!preferredCafeId && selectedCafe?.id) {
+      const currentSelection = data.find((cafe) => cafe.id === selectedCafe.id);
+      if (currentSelection) defaultCafe = currentSelection;
+    }
+
+    if (currentCafeId) {
+      const currentCafe = data.find((cafe) => cafe.id === currentCafeId);
+      if (currentCafe) defaultCafe = currentCafe;
+    }
+
+    try {
+      const storedCafeId = parseInt(window.localStorage.getItem(SELECTED_CAFE_STORAGE_KEY), 10);
+      if (!Number.isNaN(storedCafeId)) {
+        const storedCafe = data.find((cafe) => cafe.id === storedCafeId);
+        if (storedCafe) defaultCafe = storedCafe;
+      }
+    } catch {
+      // ignore localStorage read failures
+    }
+
+    broadcastCafeSelection(defaultCafe);
+    return data;
+  }, [currentCafeId, onCafeChange, selectedCafe?.id]);
+
   useEffect(() => {
     let cancelled = false;
 
-    cafesApi.getAll()
-      .then(data => {
+    async function boot() {
+      try {
+        await loadCafes();
+      } catch (err) {
         if (cancelled) return;
-
-        setLoadError('');
-        setCafes(data);
-
-        if (!data.length) {
-          broadcastCafeSelection(null);
-          return;
-        }
-
-        let defaultCafe = data[0];
-
-        if (currentCafeId) {
-          const currentCafe = data.find(cafe => cafe.id === currentCafeId);
-          if (currentCafe) defaultCafe = currentCafe;
-        }
-
-        try {
-          const storedCafeId = parseInt(window.localStorage.getItem(SELECTED_CAFE_STORAGE_KEY), 10);
-          if (!Number.isNaN(storedCafeId)) {
-            const storedCafe = data.find(cafe => cafe.id === storedCafeId);
-            if (storedCafe) defaultCafe = storedCafe;
-          }
-        } catch {
-          // ignore localStorage read failures
-        }
-
-        broadcastCafeSelection(defaultCafe);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-
         const apiError = err?.response?.data?.error;
         setLoadError(apiError || 'Could not load cafes right now.');
         setCafes([]);
         broadcastCafeSelection(null);
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    }
+
+    boot();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadCafes]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await loadCafes();
+    } catch (err) {
+      const apiError = err?.response?.data?.error;
+      setLoadError(apiError || 'Could not refresh cafes right now.');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const handleCafeAdded = async (createdCafe) => {
-    const updated = await cafesApi.getAll();
-    setCafes(updated);
+    await loadCafes({ preferredCafeId: createdCafe?.id || null });
     setShowAddCafe(false);
-
-    if (!updated.length) {
-      broadcastCafeSelection(null);
-      return;
-    }
-
-    const createdInList = createdCafe
-      ? updated.find(cafe => cafe.id === createdCafe.id)
-      : null;
-    const existingSelection = selectedCafe
-      ? updated.find(cafe => cafe.id === selectedCafe.id)
-      : null;
-
-    const nextCafe = createdInList
-      || existingSelection
-      || [...updated].sort((a, b) => b.id - a.id)[0]
-      || updated[0];
-
-    broadcastCafeSelection(nextCafe);
   };
 
   const handleSelectCafe = (cafe) => {
@@ -971,16 +979,15 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
   };
 
   const handleCafeDeleted = async (deletedCafeId) => {
-    const updated = await cafesApi.getAll();
-    const visibleCafes = updated.filter(cafe => cafe.id !== deletedCafeId);
-    setCafes(visibleCafes);
+    const updated = await loadCafes();
+    const visibleCafes = updated.filter((cafe) => cafe.id !== deletedCafeId);
 
     if (!visibleCafes.length) {
       broadcastCafeSelection(null);
       return;
     }
 
-    const nextCafe = visibleCafes.find(cafe => cafe.active) || visibleCafes[0];
+    const nextCafe = visibleCafes.find((cafe) => cafe.active) || visibleCafes[0];
     broadcastCafeSelection(nextCafe);
   };
 
@@ -994,12 +1001,17 @@ export default function AdminPanel({ onCafeChange, currentCafeId }) {
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Cafe setup</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{cafes.length} café{cafes.length !== 1 ? 's' : ''} on Menu</p>
+          <p className="text-sm text-gray-400 mt-0.5">{cafes.length} café{cafes.length !== 1 ? 's' : ''} in the system</p>
         </div>
-        <Button size="sm" onClick={() => setShowAddCafe(!showAddCafe)}>+ Add café</Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={handleRefresh} disabled={refreshing}>
+            {refreshing ? 'Refreshing...' : 'Refresh roster'}
+          </Button>
+          <Button size="sm" onClick={() => setShowAddCafe(!showAddCafe)}>+ Add café</Button>
+        </div>
       </div>
 
       {loadError && (

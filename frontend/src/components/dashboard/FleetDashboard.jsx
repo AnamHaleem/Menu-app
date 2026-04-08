@@ -315,6 +315,9 @@ export default function FleetDashboard({ selectedCafe, onSelectCafe }) {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" variant="secondary" onClick={fetchDashboard}>
+            Refresh fleet data
+          </Button>
           <Button size="sm" variant="secondary" onClick={() => { window.location.hash = '/admin'; }}>
             Open cafe setup
           </Button>
@@ -349,6 +352,74 @@ export default function FleetDashboard({ selectedCafe, onSelectCafe }) {
         <MetricCard label="Labour saved" value={fmtMoney(dashboard.overview.labourSaved)} color="text-slate-900" sub="estimated prep time reclaimed" />
         <MetricCard label="Avg forecast accuracy" value={fmtPct(dashboard.overview.avgForecastAccuracy)} color="text-slate-900" sub={`${dashboard.overview.activeCafes} active café(s)`} />
         <MetricCard label="High-priority issues" value={dashboard.overview.criticalAlerts} color={dashboard.overview.criticalAlerts ? 'text-red-600' : 'text-emerald-600'} sub={`${dashboard.overview.prepReadyToday} cafés ready for today`} />
+      </div>
+
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <Card className="p-6">
+          <SectionHeader title="Cross-cafe comparisons" action={<span className="text-xs text-slate-400">Who is leading and who is lagging?</span>} />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Best forecast accuracy</p>
+              {dashboard.benchmarking.topAccuracy[0] ? (
+                <>
+                  <p className="mt-3 text-lg font-bold text-slate-950">{dashboard.benchmarking.topAccuracy[0].cafeName}</p>
+                  <p className="mt-1 text-sm text-slate-500">{fmtPct(dashboard.benchmarking.topAccuracy[0].forecastAccuracy)} accuracy · {fmtMoney(dashboard.benchmarking.topAccuracy[0].totalSavings)} saved</p>
+                </>
+              ) : <p className="mt-3 text-sm text-slate-500">No comparison data yet.</p>}
+            </div>
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Strongest reporting discipline</p>
+              {dashboard.benchmarking.strongestAdoption[0] ? (
+                <>
+                  <p className="mt-3 text-lg font-bold text-slate-950">{dashboard.benchmarking.strongestAdoption[0].cafeName}</p>
+                  <p className="mt-1 text-sm text-slate-500">{fmtPct(dashboard.benchmarking.strongestAdoption[0].actualCaptureRate)} actual capture · {dashboard.benchmarking.strongestAdoption[0].issueCount} open issues</p>
+                </>
+              ) : <p className="mt-3 text-sm text-slate-500">No comparison data yet.</p>}
+            </div>
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Top savings performer</p>
+              {dashboard.benchmarking.topSavings[0] ? (
+                <>
+                  <p className="mt-3 text-lg font-bold text-slate-950">{dashboard.benchmarking.topSavings[0].cafeName}</p>
+                  <p className="mt-1 text-sm text-slate-500">{fmtMoney(dashboard.benchmarking.topSavings[0].totalSavings)} saved · {fmtPct(dashboard.benchmarking.topSavings[0].wasteReductionPct)} waste reduction</p>
+                </>
+              ) : <p className="mt-3 text-sm text-slate-500">No comparison data yet.</p>}
+            </div>
+            <div className="rounded-[24px] border border-red-100 bg-red-50/70 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-red-500">Needs attention now</p>
+              {dashboard.benchmarking.highestRisk[0] ? (
+                <>
+                  <p className="mt-3 text-lg font-bold text-slate-950">{dashboard.benchmarking.highestRisk[0].cafeName}</p>
+                  <p className="mt-1 text-sm text-slate-500">{dashboard.benchmarking.highestRisk[0].issueCount} active issues · {dashboard.benchmarking.highestRisk[0].riskLevel} risk</p>
+                </>
+              ) : <p className="mt-3 text-sm text-slate-500">No risk data yet.</p>}
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <SectionHeader title="Flagged areas that need work" action={<Badge color={dashboard.overview.criticalAlerts ? 'red' : 'green'}>{dashboard.overview.criticalAlerts} high-priority issues</Badge>} />
+          {dashboard.benchmarking.highestRisk.length ? (
+            <div className="space-y-3">
+              {dashboard.benchmarking.highestRisk.slice(0, 5).map((row) => (
+                <div key={row.cafeId} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">{row.cafeName}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {row.issueCount} open issue(s) · {fmtPct(row.recipeCoveragePct)} recipe coverage · {fmtPct(row.actualCaptureRate)} actual capture
+                      </p>
+                    </div>
+                    <Badge color={riskBadgeColor(row.riskLevel)}>{row.riskLevel}</Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Empty message="No priority gaps detected yet." />
+          )}
+        </Card>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[1.45fr,0.95fr] gap-6">

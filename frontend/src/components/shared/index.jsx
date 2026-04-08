@@ -154,7 +154,7 @@ export function Badge({ children, color = 'blue' }) {
     amber: 'bg-amber-50 text-amber-700 border border-amber-100'
   };
   return (
-    <span className={`inline-block text-[11px] font-semibold px-2.5 py-1 rounded-full ${colors[color]}`}>
+    <span className={`inline-flex items-center whitespace-nowrap text-[10px] leading-none font-semibold px-2.5 py-1 rounded-full ${colors[color]}`}>
       {children}
     </span>
   );

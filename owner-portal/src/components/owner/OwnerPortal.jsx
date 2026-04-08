@@ -610,11 +610,25 @@ export default function OwnerPortal() {
     <div className="min-h-screen bg-[#edf2f7] p-4 md:p-5">
       <div className="max-w-[1600px] mx-auto flex flex-col lg:flex-row gap-5">
         <aside className={[
-          'bg-white border border-slate-200 rounded-[30px] p-4 flex flex-col gap-4 shrink-0 shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
+          'relative overflow-visible bg-white border border-slate-200 rounded-[30px] p-4 flex flex-col gap-4 shrink-0 shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
           sidebarCollapsed ? 'lg:w-[108px]' : 'lg:w-[290px]',
           'w-full lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)]'
         ].join(' ')}>
-          <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed((prev) => !prev)}
+            className={[
+              'hidden lg:flex absolute top-6 h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-400 hover:text-slate-700 hover:bg-white transition-colors shadow-[0_1px_2px_rgba(15,23,42,0.06)]',
+              sidebarCollapsed ? 'lg:-right-4' : 'lg:right-5'
+            ].join(' ')}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-4 h-4 transition-transform ${sidebarCollapsed ? 'rotate-180' : ''}`}>
+              <path d="m15 18-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+
+          <div className={['flex items-center min-w-0', sidebarCollapsed ? 'lg:justify-center lg:min-h-[52px]' : 'justify-between gap-3 pr-12'].join(' ')}>
             <div className={['flex items-center gap-3 min-w-0', sidebarCollapsed ? 'lg:justify-center lg:w-full' : ''].join(' ')}>
               <BrandMark />
               <div className={sidebarCollapsed ? 'lg:hidden' : ''}>
@@ -622,17 +636,6 @@ export default function OwnerPortal() {
                 <p className="text-sm text-slate-400 mt-1">Owner portal</p>
               </div>
             </div>
-
-            <button
-              type="button"
-              onClick={() => setSidebarCollapsed((prev) => !prev)}
-              className="hidden lg:flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-400 hover:text-slate-700 hover:bg-white transition-colors"
-              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-4 h-4 transition-transform ${sidebarCollapsed ? 'rotate-180' : ''}`}>
-                <path d="m15 18-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
           </div>
 
           <div className="h-px bg-slate-100" />
