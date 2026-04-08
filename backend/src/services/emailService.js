@@ -5,6 +5,40 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const RESEND_FROM_EMAIL = (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
 const RESEND_FROM_NAME = (process.env.RESEND_FROM_NAME || 'Menu').trim();
 
+function getOwnerPortalBaseUrl() {
+  const rawConfiguredUrl = (
+    process.env.OWNER_PORTAL_URL ||
+    process.env.FRONTEND_URL ||
+    'http://localhost:5174'
+  );
+
+  const firstUrl = String(rawConfiguredUrl)
+    .split(',')
+    .map((value) => value.trim())
+    .find(Boolean);
+
+  return String(firstUrl || 'http://localhost:5174').replace(/\/+$/, '');
+}
+
+function formatTorontoDate(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(date);
+}
+
+function buildOwnerCheckInUrl(cafe) {
+  const baseUrl = getOwnerPortalBaseUrl();
+  const params = new URLSearchParams({
+    cafeId: String(cafe.id),
+    checkIn: '1',
+    logDate: formatTorontoDate()
+  });
+  return `${baseUrl}/#/dashboard?${params.toString()}`;
+}
+
 function getFromAddress() {
   return `${RESEND_FROM_NAME} <${RESEND_FROM_EMAIL}>`;
 }
@@ -98,7 +132,7 @@ async function sendPrepList(cafe, forecast) {
 }
 
 async function sendDailyCheckIn(cafe) {
-  const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLScFAtC1mwYRTjRKm3ySIwWvr1OJQ6W_jAs_RhK-UjohC2WOfA/viewform';
+  const checkInUrl = buildOwnerCheckInUrl(cafe);
   const recipient = (cafe.kitchen_lead_email || cafe.email || '').trim();
   if (!recipient) {
     throw new Error(`No recipient email configured for cafe ${cafe.name}`);
@@ -111,8 +145,11 @@ async function sendDailyCheckIn(cafe) {
     html: `
       <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;">
         <h2 style="color:#1F4E79;">Two minutes to close out today</h2>
-        <p style="color:#555;font-size:14px;">Waste, 86 incidents and covers. That is it.</p>
-        <a href="${formUrl}" style="display:inline-block;background:#1F4E79;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-size:14px;font-weight:600;">Fill in today's numbers</a>
+        <p style="color:#555;font-size:14px;">Open ${cafe.name} in Menu and log waste, 86 incidents, covers, and notes directly in the owner portal.</p>
+        <a href="${checkInUrl}" style="display:inline-block;background:#1F4E79;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-size:14px;font-weight:600;">Open today&apos;s check-in</a>
+        <p style="color:#6b7280;font-size:12px;line-height:1.5;margin-top:16px;">
+          If you are not already signed in, Menu will ask you to verify first and then take you straight to the close-out form.
+        </p>
         <p style="color:#aaa;font-size:11px;margin-top:24px;">Menu by PrepCast</p>
       </div>
     `

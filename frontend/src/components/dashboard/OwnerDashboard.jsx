@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Line, Bar } from 'react-chartjs-2';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement,
@@ -23,11 +24,34 @@ const fmt$ = (v) => '$' + Math.round(Number(v) || 0).toLocaleString();
 const fmtPct = (v) => Math.round(Number(v) || 0) + '%';
 const fmtMult = (v) => `${Number(v || 1).toFixed(2)}x`;
 
+function getTodayTorontoDate() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+}
+
+function normalizeLogDate(value) {
+  const raw = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
+}
+
 export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
+  const location = useLocation();
   const metricsClient = dataApi?.metrics || metricsApi;
   const logsClient = dataApi?.logs || logsApi;
   const weatherClient = dataApi?.weather || weatherApi;
   const forecastClient = dataApi?.forecast || forecastApi;
+  const logFormRef = useRef(null);
+  const checkInRequest = useMemo(() => {
+    const params = new URLSearchParams(location.search || '');
+    return {
+      open: params.get('checkIn') === '1' || params.get('action') === 'checkin',
+      logDate: normalizeLogDate(params.get('logDate')) || getTodayTorontoDate()
+    };
+  }, [location.search]);
 
   const [metrics, setMetrics] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -55,6 +79,28 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
     }).finally(() => setLoading(false));
   }, [cafeId, metricsClient, logsClient, weatherClient, forecastClient, dateRange.startDate, dateRange.endDate]);
 
+  useEffect(() => {
+    if (checkInRequest.open) {
+      setShowLogForm(true);
+    }
+  }, [checkInRequest.open, cafeId]);
+
+  useEffect(() => {
+    if (!showLogForm) return;
+    const existingLog = logs.find((log) => normalizeLogDate(log.date) === checkInRequest.logDate);
+    setLogForm({
+      waste_value: existingLog?.waste_value != null ? String(existingLog.waste_value) : '',
+      items_86d: existingLog?.items_86d != null ? String(existingLog.items_86d) : '',
+      actual_covers: existingLog?.actual_covers != null ? String(existingLog.actual_covers) : '',
+      notes: existingLog?.notes || ''
+    });
+  }, [logs, showLogForm, checkInRequest.logDate]);
+
+  useEffect(() => {
+    if (!showLogForm || !checkInRequest.open || !logFormRef.current) return;
+    logFormRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [showLogForm, checkInRequest.open]);
+
   const handleSendPrepList = async () => {
     setSending(true);
     try {
@@ -70,8 +116,7 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
   };
 
   const handleLogSubmit = async () => {
-    const today = new Date().toISOString().split('T')[0];
-    await logsClient.create(cafeId, { date: today, ...logForm });
+    await logsClient.create(cafeId, { date: checkInRequest.logDate, ...logForm });
     const updated = await logsClient.get(cafeId, dateRange);
     const updatedMetrics = await metricsClient.get(cafeId, dateRange);
     setLogs(updated);
@@ -134,6 +179,13 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
     .sort((a, b) => Math.abs(b.multiplier - 1) - Math.abs(a.multiplier - 1))
     .slice(0, 6);
   const analysisLabel = metrics?.range?.label || formatDateRangeLabel(dateRange.startDate, dateRange.endDate);
+  const checkInDateLabel = useMemo(() => {
+    const safeDate = normalizeLogDate(checkInRequest.logDate);
+    if (!safeDate) return 'today';
+    const parsed = new Date(`${safeDate}T12:00:00`);
+    if (Number.isNaN(parsed.getTime())) return safeDate;
+    return parsed.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' });
+  }, [checkInRequest.logDate]);
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
@@ -149,7 +201,7 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => setShowLogForm(!showLogForm)} size="sm">
-            Log today
+            {checkInRequest.open ? 'Open close-out form' : 'Log today'}
           </Button>
           <Button onClick={handleSendPrepList} disabled={sending} size="sm">
             {sending ? 'Sending...' : 'Send prep list'}
@@ -157,35 +209,57 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
         </div>
       </div>
 
+      {checkInRequest.open && (
+        <Card className="mb-6 p-5 border border-blue-100 bg-blue-50/70">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-blue-500">Daily close-out</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">
+                Enter {checkInDateLabel}&apos;s numbers for {cafeName}.
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                We&apos;ll save waste, 86 incidents, covers, and notes directly into the portal instead of sending you to a separate form.
+              </p>
+            </div>
+            <Button size="sm" onClick={() => setShowLogForm(true)}>
+              Open check-in
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <DateRangePicker value={dateRange} onChange={setDateRange} className="mb-6" />
 
       {/* Daily log form */}
       {showLogForm && (
-        <Card className="mb-6 p-5">
-          <p className="text-sm font-semibold text-gray-700 mb-4">Today's numbers</p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-            {[
-              { key: 'waste_value', label: 'Waste value ($)', type: 'number' },
-              { key: 'items_86d', label: '86 incidents', type: 'number' },
-              { key: 'actual_covers', label: 'Customers served', type: 'number' },
-              { key: 'notes', label: 'Notes', type: 'text' }
-            ].map(({ key, label, type }) => (
-              <div key={key}>
-                <label className="block text-xs text-gray-400 mb-1">{label}</label>
-                <input
-                  type={type}
-                  value={logForm[key]}
-                  onChange={e => setLogForm(p => ({ ...p, [key]: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
-                />
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <Button onClick={handleLogSubmit} size="sm">Save</Button>
-            <Button variant="ghost" onClick={() => setShowLogForm(false)} size="sm">Cancel</Button>
-          </div>
-        </Card>
+        <div ref={logFormRef}>
+          <Card className="mb-6 p-5">
+            <p className="text-sm font-semibold text-gray-700 mb-1">Daily numbers</p>
+            <p className="text-xs text-gray-500 mb-4">Logging for {checkInDateLabel}</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+              {[
+                { key: 'waste_value', label: 'Waste value ($)', type: 'number' },
+                { key: 'items_86d', label: '86 incidents', type: 'number' },
+                { key: 'actual_covers', label: 'Customers served', type: 'number' },
+                { key: 'notes', label: 'Notes', type: 'text' }
+              ].map(({ key, label, type }) => (
+                <div key={key}>
+                  <label className="block text-xs text-gray-400 mb-1">{label}</label>
+                  <input
+                    type={type}
+                    value={logForm[key]}
+                    onChange={e => setLogForm(p => ({ ...p, [key]: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-navy-900"
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleLogSubmit} size="sm">Save</Button>
+              <Button variant="ghost" onClick={() => setShowLogForm(false)} size="sm">Cancel</Button>
+            </div>
+          </Card>
+        </div>
       )}
 
       {/* Hero metrics */}

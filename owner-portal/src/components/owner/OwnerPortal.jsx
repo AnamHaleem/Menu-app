@@ -180,6 +180,11 @@ function storeOwnerSelectedCafeId(cafeId) {
 
 export default function OwnerPortal() {
   const location = useLocation();
+  const requestedCafeId = useMemo(() => {
+    const params = new URLSearchParams(location.search || '');
+    const parsed = parseInt(params.get('cafeId') || '', 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }, [location.search]);
   const [loading, setLoading] = useState(true);
   const [owner, setOwner] = useState(null);
   const [signInForm, setSignInForm] = useState({
@@ -279,6 +284,14 @@ export default function OwnerPortal() {
       setSelectedCafeId(selectedCafe.id);
     }
   }, [selectedCafe, selectedCafeId]);
+
+  useEffect(() => {
+    if (!requestedCafeId || !cafes.length) return;
+    const requestedCafe = cafes.find((cafe) => cafe.id === requestedCafeId);
+    if (requestedCafe && selectedCafeId !== requestedCafe.id) {
+      setSelectedCafeId(requestedCafe.id);
+    }
+  }, [cafes, requestedCafeId, selectedCafeId]);
 
   const handleFormChange = (key, value) => {
     let nextValue = value;
