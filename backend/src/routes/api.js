@@ -1519,6 +1519,7 @@ async function buildAdminHqSnapshot(options = {}) {
     unmappedTransactions,
     learningCoverage,
     forecastPerformance,
+    activeModelPerformance,
     shadowSummary,
     auditRows
   ] = await Promise.all([
@@ -1626,6 +1627,55 @@ async function buildAdminHqSnapshot(options = {}) {
        GROUP BY cafe_id`,
       [range.startDate, range.endDate, cafeIds]
     ),
+    pool.query(
+      `
+        WITH preferred_models AS (
+          SELECT
+            c.id AS cafe_id,
+            COALESCE(
+              (
+                SELECT mv.id
+                FROM ml_model_versions mv
+                WHERE mv.status = 'active'
+                  AND COALESCE(mv.feature_spec->'scope'->>'type', 'fleet') = 'cafe'
+                  AND NULLIF(mv.feature_spec->'scope'->>'cafeId', '')::int = c.id
+                ORDER BY COALESCE(mv.activated_at, mv.created_at) DESC, mv.id DESC
+                LIMIT 1
+              ),
+              (
+                SELECT mv.id
+                FROM ml_model_versions mv
+                WHERE mv.status = 'active'
+                  AND COALESCE(mv.feature_spec->'scope'->>'type', 'fleet') = 'fleet'
+                ORDER BY COALESCE(mv.activated_at, mv.created_at) DESC, mv.id DESC
+                LIMIT 1
+              )
+            ) AS model_version_id
+          FROM cafes c
+          WHERE c.id = ANY($1::int[])
+        )
+        SELECT
+          pm.cafe_id,
+          pm.model_version_id,
+          COUNT(*) FILTER (WHERE mlf.id IS NOT NULL)::int AS active_model_compared_rows,
+          COUNT(DISTINCT mp.item_id) FILTER (WHERE mlf.id IS NOT NULL)::int AS active_model_items,
+          AVG(
+            (ABS(mp.predicted_qty - COALESCE(mlf.actual_qty, 0)) / GREATEST(COALESCE(mlf.actual_qty, 0), 1)) * 100
+          ) FILTER (WHERE mlf.id IS NOT NULL) AS active_model_avg_abs_error_pct
+        FROM preferred_models pm
+        LEFT JOIN ml_predictions mp
+          ON mp.model_version_id = pm.model_version_id
+         AND mp.cafe_id = pm.cafe_id
+         AND mp.prediction_date >= $2::date
+         AND mp.prediction_date <= $3::date
+        LEFT JOIN ml_daily_features mlf
+          ON mlf.cafe_id = mp.cafe_id
+         AND mlf.item_id = mp.item_id
+         AND mlf.feature_date = mp.prediction_date
+        GROUP BY pm.cafe_id, pm.model_version_id
+      `,
+      [cafeIds, range.startDate, range.endDate]
+    ),
     mlShadowService.getShadowSummary({
       startDate: range.startDate,
       endDate: range.endDate
@@ -1648,6 +1698,7 @@ async function buildAdminHqSnapshot(options = {}) {
   const unmappedByCafeId = mapRowsByCafeId(unmappedTransactions.rows);
   const learningByCafeId = mapRowsByCafeId(learningCoverage.rows);
   const forecastByCafeId = mapRowsByCafeId(forecastPerformance.rows);
+  const activeModelByCafeId = mapRowsByCafeId(activeModelPerformance.rows);
 
   const cafeHealth = cafes.map((cafe) => {
     const metrics = metricsByCafeId.get(cafe.id) || null;
@@ -1660,6 +1711,7 @@ async function buildAdminHqSnapshot(options = {}) {
     const unmappedRow = unmappedByCafeId.get(cafe.id) || {};
     const learningRow = learningByCafeId.get(cafe.id) || {};
     const forecastRow = forecastByCafeId.get(cafe.id) || {};
+    const activeModelRow = activeModelByCafeId.get(cafe.id) || {};
 
     return summarizeCafeHealth(cafe, metrics, {
       ownerAccessCount: Number(cafe.owner_access_count || 0),
@@ -1668,11 +1720,21 @@ async function buildAdminHqSnapshot(options = {}) {
       ingredientsMissingUnit: Number(unitRow.ingredients_missing_unit || 0),
       duplicateItemGroups: Number(duplicateRow.duplicate_item_groups || 0),
       unmappedTransactions: Number(unmappedRow.unmapped_transactions || 0),
-      learningItems: Number(learningRow.learning_items || 0),
-      avgAbsErrorPct: forecastRow.avg_abs_error_pct === null || forecastRow.avg_abs_error_pct === undefined
-        ? null
-        : Number(forecastRow.avg_abs_error_pct),
-      actualForecastSamples: Number(forecastRow.actual_forecast_samples || 0),
+      learningItems: Math.max(
+        Number(learningRow.learning_items || 0),
+        Number(activeModelRow.active_model_items || 0)
+      ),
+      avgAbsErrorPct: activeModelRow.active_model_avg_abs_error_pct === null || activeModelRow.active_model_avg_abs_error_pct === undefined
+        ? (
+            forecastRow.avg_abs_error_pct === null || forecastRow.avg_abs_error_pct === undefined
+              ? null
+              : Number(forecastRow.avg_abs_error_pct)
+          )
+        : Number(activeModelRow.active_model_avg_abs_error_pct),
+      actualForecastSamples: Math.max(
+        Number(forecastRow.actual_forecast_samples || 0),
+        Number(activeModelRow.active_model_compared_rows || 0)
+      ),
       aiAppliedCount: Number(forecastRow.ai_applied_count || 0),
       prepRowsInRange: Number(prepRow.prep_rows_in_range || 0),
       prepCompletedInRange: Number(prepRow.prep_completed_in_range || 0),
