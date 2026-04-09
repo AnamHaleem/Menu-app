@@ -241,6 +241,7 @@ export const adminHqApi = {
   trainMlShadowModel: (payload) => api.post('/admin/ml/shadow/train', payload).then((r) => r.data),
   trainMlLiveModel: (payload) => api.post('/admin/ml/live/train', payload).then((r) => r.data),
   trainMlLiveFleet: (payload) => api.post('/admin/ml/live/train-fleet', payload).then((r) => r.data),
+  refreshMlLiveFleet: (payload = {}) => api.post('/admin/ml/live/refresh-fleet', payload).then((r) => r.data),
   upsertMlModelVersion: (payload) => api.post('/admin/ml/model-versions', payload).then((r) => r.data),
   importMlShadowPredictions: (payload) => api.post('/admin/ml/shadow/predictions/import', payload).then((r) => r.data)
 };

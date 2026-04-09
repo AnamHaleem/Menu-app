@@ -2092,6 +2092,31 @@ router.post('/admin/ml/live/train-fleet', async (req, res) => {
   }
 });
 
+router.post('/admin/ml/live/refresh-fleet', async (req, res) => {
+  try {
+    const actorEmail = getAdminActorEmail(req);
+    const result = await mlTrainingService.refreshFleetLiveModels({
+      ...(req.body || {}),
+      requestedBy: actorEmail || 'admin',
+      source: req.body?.source || 'admin_refresh_live_fleet'
+    });
+
+    await writeAdminAuditEvent({
+      eventType: 'ml.live_refresh.fleet',
+      severity: 'high',
+      cafeId: null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `Live ML refresh completed for ${result.cafesTrained}/${result.cafesAttempted} cafes`,
+      details: result
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 
 router.post('/admin/ml/model-versions', async (req, res) => {
   try {

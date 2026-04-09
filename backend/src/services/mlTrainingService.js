@@ -1,5 +1,6 @@
 const pool = require('../db/pool');
 const mlShadowService = require('./mlShadowService');
+const mlFeatureService = require('./mlFeatureService');
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_HOLDOUT_DAYS = Math.max(3, Number(process.env.ML_SHADOW_HOLDOUT_DAYS || 7));
@@ -702,7 +703,128 @@ async function trainFleetShadowModels(options = {}) {
   };
 }
 
+async function resolveCafeTrainingWindows(cafeIds = null) {
+  const clauses = ['c.active = true'];
+  const values = [];
+
+  if (Array.isArray(cafeIds) && cafeIds.length) {
+    values.push(cafeIds.map((value) => Number(value)).filter((value) => Number.isFinite(value)));
+    clauses.push(`c.id = ANY($${values.length}::int[])`);
+  }
+
+  const result = await pool.query(
+    `
+      SELECT
+        c.id AS cafe_id,
+        c.name AS cafe_name,
+        MIN(t.date)::text AS first_tx_date,
+        MAX(t.date)::text AS last_tx_date,
+        COUNT(*)::int AS transaction_rows
+      FROM cafes c
+      LEFT JOIN transactions t ON t.cafe_id = c.id
+      WHERE ${clauses.join(' AND ')}
+      GROUP BY c.id, c.name
+      ORDER BY c.name ASC
+    `,
+    values
+  );
+
+  return result.rows.map((row) => ({
+    cafeId: Number(row.cafe_id),
+    cafeName: row.cafe_name,
+    startDate: normalizeIsoDate(row.first_tx_date),
+    endDate: normalizeIsoDate(row.last_tx_date),
+    transactionRows: Number(row.transaction_rows || 0)
+  }));
+}
+
+async function refreshFleetLiveModels(options = {}) {
+  const requestedCafeIds = Array.isArray(options.cafeIds)
+    ? options.cafeIds.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+    : [];
+
+  const windows = await resolveCafeTrainingWindows(requestedCafeIds.length ? requestedCafeIds : null);
+  if (!windows.length) {
+    throw createHttpError(400, 'No active cafes found to refresh');
+  }
+
+  const successful = [];
+  const failed = [];
+  const skipped = [];
+
+  for (const cafe of windows) {
+    if (!cafe.startDate || !cafe.endDate || cafe.transactionRows <= 0) {
+      skipped.push({
+        cafeId: cafe.cafeId,
+        cafeName: cafe.cafeName,
+        reason: 'No transaction history found'
+      });
+      continue;
+    }
+
+    try {
+      const featureResult = await mlFeatureService.buildFeatureStore({
+        cafeId: cafe.cafeId,
+        startDate: cafe.startDate,
+        endDate: cafe.endDate,
+        requestedBy: options.requestedBy || 'system',
+        source: options.source || 'ml_auto_refresh'
+      });
+
+      const trained = await trainAndImportShadowModel({
+        cafeId: cafe.cafeId,
+        startDate: cafe.startDate,
+        endDate: cafe.endDate,
+        holdoutDays: options.holdoutDays,
+        modelKey: options.modelKey
+          ? `${String(options.modelKey).trim()}-cafe-${cafe.cafeId}`
+          : `linear-live-v1-cafe-${cafe.cafeId}`,
+        displayName: options.displayName
+          ? `${String(options.displayName).trim()} - ${cafe.cafeName}`
+          : `Linear Live v1 - ${cafe.cafeName}`,
+        status: options.status || 'active',
+        requestedBy: options.requestedBy || 'system',
+        source: options.source || 'ml_auto_refresh'
+      });
+
+      successful.push({
+        cafeId: cafe.cafeId,
+        cafeName: cafe.cafeName,
+        startDate: cafe.startDate,
+        endDate: cafe.endDate,
+        transactionRows: cafe.transactionRows,
+        featureRowsBuilt: featureResult.featureRowsBuilt,
+        modelVersionId: trained.modelVersion.id,
+        modelKey: trained.modelVersion.model_key,
+        predictionsWritten: trained.predictionsWritten,
+        metrics: trained.metrics,
+        split: trained.split
+      });
+    } catch (error) {
+      failed.push({
+        cafeId: cafe.cafeId,
+        cafeName: cafe.cafeName,
+        startDate: cafe.startDate,
+        endDate: cafe.endDate,
+        transactionRows: cafe.transactionRows,
+        error: error.message || String(error)
+      });
+    }
+  }
+
+  return {
+    cafesAttempted: windows.length,
+    cafesTrained: successful.length,
+    cafesFailed: failed.length,
+    cafesSkipped: skipped.length,
+    successful,
+    failed,
+    skipped
+  };
+}
+
 module.exports = {
   trainAndImportShadowModel,
-  trainFleetShadowModels
+  trainFleetShadowModels,
+  refreshFleetLiveModels
 };

@@ -2,9 +2,13 @@ const cron = require('node-cron');
 const pool = require('../db/pool');
 const forecastService = require('./forecastService');
 const emailService = require('./emailService');
+const mlTrainingService = require('./mlTrainingService');
 
 const PREP_TIMEZONE = process.env.PREP_TIMEZONE || 'America/Toronto';
+const ML_AUTOMATION_ENABLED = ['1', 'true', 'yes'].includes(String(process.env.ML_AUTOMATION_ENABLED || 'false').trim().toLowerCase());
+const ML_AUTOMATION_CRON = process.env.ML_AUTOMATION_CRON || '15 2 * * *';
 let prepDispatcherRunning = false;
+let mlRefreshRunning = false;
 
 function getTimezoneParts(date = new Date(), timezone = PREP_TIMEZONE) {
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -229,6 +233,30 @@ async function runPrepNow({
   };
 }
 
+async function runAutomatedMlRefresh(source = 'scheduler_ml_refresh') {
+  if (mlRefreshRunning) {
+    return { skipped: true, reason: 'ML refresh already running' };
+  }
+
+  mlRefreshRunning = true;
+
+  try {
+    const result = await mlTrainingService.refreshFleetLiveModels({
+      requestedBy: 'scheduler',
+      source,
+      status: 'active'
+    });
+
+    return {
+      ok: true,
+      source,
+      ...result
+    };
+  } finally {
+    mlRefreshRunning = false;
+  }
+}
+
 function startScheduler() {
   // Every minute — send prep list to cafes whose prep_send_time matches current Toronto time
   cron.schedule('* * * * *', async () => {
@@ -267,7 +295,26 @@ function startScheduler() {
     }
   }, { timezone: 'America/Toronto' });
 
-  console.log(`Scheduler started — prep dispatcher every minute (${PREP_TIMEZONE}), check-in at 9pm Toronto time`);
+  if (ML_AUTOMATION_ENABLED) {
+    cron.schedule(ML_AUTOMATION_CRON, async () => {
+      try {
+        const result = await runAutomatedMlRefresh('scheduler_ml_refresh');
+        if (result?.skipped) {
+          return;
+        }
+
+        console.log(
+          `ML auto-refresh completed: ${result.cafesTrained}/${result.cafesAttempted} trained, ${result.cafesSkipped} skipped, ${result.cafesFailed} failed`
+        );
+      } catch (err) {
+        console.error('Automated ML refresh failed:', err.message);
+      }
+    }, { timezone: PREP_TIMEZONE });
+  }
+
+  console.log(
+    `Scheduler started — prep dispatcher every minute (${PREP_TIMEZONE}), check-in at 9pm Toronto time${ML_AUTOMATION_ENABLED ? `, ML auto-refresh on "${ML_AUTOMATION_CRON}"` : ', ML auto-refresh disabled'}`
+  );
 }
 
-module.exports = { startScheduler, runPrepNow, runDuePrepDispatchTick };
+module.exports = { startScheduler, runPrepNow, runDuePrepDispatchTick, runAutomatedMlRefresh };
