@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { SignIn, SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import FleetDashboard from './components/dashboard/FleetDashboard';
-import KitchenView from './components/kitchen/KitchenView';
 import AdminPanel from './components/admin/AdminPanel';
+import CafeOpsConsole from './components/operations/CafeOpsConsole';
 import { cafesApi, metricsApi } from './lib/api';
 import { Spinner, Card, Button } from './components/shared';
 
@@ -184,10 +184,10 @@ function AdminSidebar({ authEnabled, collapsed, onToggle }) {
 
 function pageMetaForPath(pathname) {
   if (pathname.includes('/kitchen')) {
-      return {
-        eyebrow: 'Operations',
+    return {
+      eyebrow: 'Operations',
       title: 'Cafe Operations',
-      subtitle: 'Run one cafe’s execution workspace: prep, actuals, and learning feedback.'
+      subtitle: 'Monitor every cafe, prioritize interventions, and drill into a live workspace only when needed.'
     };
   }
 
@@ -225,7 +225,7 @@ function NoCafeState() {
 function ShellHeader({ cafe, authEnabled }) {
   const location = useLocation();
   const meta = pageMetaForPath(location.pathname);
-  const showCafeChip = location.pathname.includes('/kitchen');
+  const showCafeChip = false;
 
   return (
     <Card className="px-6 py-5">
@@ -289,7 +289,7 @@ function AppShell({ cafe, authEnabled, onCafeChange }) {
               />
               <Route
                 path="/kitchen"
-                element={cafe ? <KitchenView cafeId={cafe.id} cafeName={cafe.name || 'Your Cafe'} /> : <NoCafeState />}
+                element={<CafeOpsConsole selectedCafe={cafe} onSelectCafe={onCafeChange} />}
               />
               <Route path="/admin" element={<AdminPanel onCafeChange={onCafeChange} currentCafeId={cafe?.id} />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />

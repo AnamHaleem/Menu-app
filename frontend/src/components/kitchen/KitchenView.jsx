@@ -68,7 +68,7 @@ function AccordionSection({ title, summary = '', defaultOpen = false, children }
   );
 }
 
-export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
+export default function KitchenView({ cafeId, cafeName, dataApi = null, embedded = false }) {
   const prepClient = dataApi?.prepList || prepListApi;
   const prepSummaryClient = dataApi?.prepSummary || prepSummaryApi;
   const prepAnalyticsClient = dataApi?.prepAnalytics || prepAnalyticsApi;
@@ -327,13 +327,13 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
       : 'No historical prep analytics available yet.';
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-6 max-w-3xl mx-auto">
+    <div className={embedded ? 'bg-transparent p-0 max-w-none' : 'min-h-screen bg-gray-50 p-4 md:p-6 max-w-3xl mx-auto'}>
 
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-1">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Today's Prep List</h1>
+            <h1 className="text-xl font-semibold text-gray-900">{embedded ? 'Today’s Prep Workspace' : "Today's Prep List"}</h1>
             <p className="text-sm text-gray-400 mt-0.5">
               {cafeName} &mdash; {new Date().toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })}
             </p>
@@ -375,25 +375,27 @@ export default function KitchenView({ cafeId, cafeName, dataApi = null }) {
         )}
       </div>
 
-      <Card className="p-4 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">1. Execute prep</p>
-            <p className="mt-2 text-sm font-semibold text-slate-900">Work through today&apos;s station list</p>
-            <p className="mt-1 text-xs text-slate-500">This is the live kitchen run sheet for one cafe, not the fleet dashboard.</p>
+      {!embedded && (
+        <Card className="p-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">1. Execute prep</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">Work through today&apos;s station list</p>
+              <p className="mt-1 text-xs text-slate-500">This is the live kitchen run sheet for one cafe, not the fleet dashboard.</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">2. Capture actuals</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">Enter what staff actually prepped</p>
+              <p className="mt-1 text-xs text-slate-500">Actuals make the variance view meaningful and feed the learning loop.</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">3. Improve tomorrow</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">Review variance and close the loop</p>
+              <p className="mt-1 text-xs text-slate-500">Over- and under-prep signals help forecasting improve over time.</p>
+            </div>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">2. Capture actuals</p>
-            <p className="mt-2 text-sm font-semibold text-slate-900">Enter what staff actually prepped</p>
-            <p className="mt-1 text-xs text-slate-500">Actuals make the variance view meaningful and feed the learning loop.</p>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">3. Improve tomorrow</p>
-            <p className="mt-2 text-sm font-semibold text-slate-900">Review variance and close the loop</p>
-            <p className="mt-1 text-xs text-slate-500">Over- and under-prep signals help forecasting improve over time.</p>
-          </div>
-        </div>
-      </Card>
+        </Card>
+      )}
 
       {/* No prep list yet */}
       {prepList.length === 0 && (
