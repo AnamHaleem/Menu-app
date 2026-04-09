@@ -366,7 +366,11 @@ async function buildFeatureStore(options = {}) {
   const defaultRange = buildDefaultRange();
   const startDate = normalizeIsoDate(options.startDate) || defaultRange.startDate;
   const endDate = normalizeIsoDate(options.endDate) || defaultRange.endDate;
-  const requestedCafeId = Number.isInteger(Number(options.cafeId)) ? Number(options.cafeId) : null;
+  const requestedCafeId = options.cafeId === null || options.cafeId === undefined || options.cafeId === ''
+    ? null
+    : Number.isInteger(Number(options.cafeId))
+      ? Number(options.cafeId)
+      : null;
   const requestedBy = options.requestedBy || null;
   const source = String(options.source || 'manual_api').trim() || 'manual_api';
 
