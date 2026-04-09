@@ -6,6 +6,7 @@ const pool = require('../db/pool');
 const forecastService = require('../services/forecastService');
 const mlFeatureService = require('../services/mlFeatureService');
 const mlShadowService = require('../services/mlShadowService');
+const mlTrainingService = require('../services/mlTrainingService');
 const weatherService = require('../services/weatherService');
 const emailService = require('../services/emailService');
 const smsService = require('../services/smsService');
@@ -1922,6 +1923,31 @@ router.get('/admin/ml/feature-store/export.csv', async (req, res) => {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="ml-feature-store.csv"');
     res.send(csv);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ml/shadow/train', async (req, res) => {
+  try {
+    const actorEmail = getAdminActorEmail(req);
+    const result = await mlTrainingService.trainAndImportShadowModel({
+      ...(req.body || {}),
+      requestedBy: actorEmail || 'admin',
+      source: req.body?.source || 'admin_train'
+    });
+
+    await writeAdminAuditEvent({
+      eventType: 'ml.shadow_train.run',
+      severity: 'medium',
+      cafeId: req.body?.cafeId ? Number(req.body.cafeId) : null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `Trained ${result.modelVersion.display_name} and imported ${result.predictionsWritten} shadow predictions`,
+      details: result
+    });
+
+    res.status(201).json(result);
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }
