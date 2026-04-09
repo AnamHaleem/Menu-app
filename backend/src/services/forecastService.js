@@ -36,6 +36,41 @@ function normalizeItemKey(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function parseJsonObject(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return {};
+  }
+}
+
+function firstPositiveNumber(values, fallback = 1) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return fallback;
+}
+
+function averageNumbers(values = []) {
+  const valid = values.filter((value) => Number.isFinite(value));
+  if (!valid.length) return 0;
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length;
+}
+
+function getMlWeatherBucket(condition, tempC) {
+  const normalized = String(condition || '').trim().toLowerCase();
+  if (normalized.includes('snow')) return 'snow';
+  if (normalized.includes('rain') || normalized.includes('drizzle') || normalized.includes('thunder')) return 'wet';
+  if (normalized.includes('clear') && tempC >= 20) return 'hot-clear';
+  if (normalized.includes('clear')) return 'clear';
+  if (normalized.includes('cloud')) return 'cloudy';
+  if (tempC <= 0) return 'cold';
+  return normalized || 'unknown';
+}
+
 function getWeatherModifier(itemName, condition, tempC) {
   const isHotDrink = WEATHER_MODIFIERS.hotDrinks.includes(itemName);
   const isColdDrink = WEATHER_MODIFIERS.coldDrinks.includes(itemName);
@@ -65,6 +100,192 @@ function getHolidayModifier(behaviour) {
     default:
       return 1.0;
   }
+}
+
+async function getActiveMlModelForCafe(client, cafeId) {
+  const result = await client.query(
+    `
+      SELECT *
+      FROM ml_model_versions
+      WHERE status = 'active'
+      ORDER BY COALESCE(activated_at, created_at) DESC, id DESC
+    `
+  );
+
+  if (!result.rows.length) return null;
+
+  let fleetFallback = null;
+  for (const row of result.rows) {
+    const featureSpec = parseJsonObject(row.feature_spec);
+    const scope = featureSpec.scope || null;
+    if (scope?.type === 'cafe' && Number(scope.cafeId) === Number(cafeId)) {
+      return { ...row, featureSpec };
+    }
+    if (!fleetFallback && (!scope || scope.type === 'fleet')) {
+      fleetFallback = { ...row, featureSpec };
+    }
+  }
+
+  return fleetFallback;
+}
+
+async function getLatestMlFeaturesByItemId(client, cafeId, targetDate) {
+  const result = await client.query(
+    `
+      SELECT DISTINCT ON (item_id)
+        item_id,
+        feature_date::text AS feature_date,
+        item_category,
+        lag_qty_1d,
+        lag_qty_7d,
+        avg_qty_7d,
+        avg_qty_14d,
+        avg_qty_28d,
+        avg_qty_same_weekday_4w,
+        rolling_revenue_7d,
+        avg_price,
+        learning_multiplier,
+        learning_samples,
+        ai_recent_7d_rate,
+        prep_days_last_7d,
+        waste_value_last_7d,
+        items_86_last_7d,
+        stockout_flag,
+        latest_forecast_qty,
+        latest_base_forecast_qty
+      FROM ml_daily_features
+      WHERE cafe_id = $1
+        AND feature_date < $2::date
+      ORDER BY item_id, feature_date DESC, id DESC
+    `,
+    [cafeId, targetDate]
+  );
+
+  const map = new Map();
+  result.rows.forEach((row) => {
+    map.set(Number(row.item_id), {
+      featureDate: row.feature_date,
+      itemCategory: row.item_category || 'uncategorized',
+      lagQty1d: Number(row.lag_qty_1d || 0),
+      lagQty7d: Number(row.lag_qty_7d || 0),
+      avgQty7d: Number(row.avg_qty_7d || 0),
+      avgQty14d: Number(row.avg_qty_14d || 0),
+      avgQty28d: Number(row.avg_qty_28d || 0),
+      avgQtySameWeekday4w: Number(row.avg_qty_same_weekday_4w || 0),
+      rollingRevenue7d: Number(row.rolling_revenue_7d || 0),
+      avgPrice: Number(row.avg_price || 0),
+      learningMultiplier: Number(row.learning_multiplier || 1),
+      learningSamples: Number(row.learning_samples || 0),
+      aiRecent7dRate: Number(row.ai_recent_7d_rate || 0),
+      prepDaysLast7d: Number(row.prep_days_last_7d || 0),
+      wasteValueLast7d: Number(row.waste_value_last_7d || 0),
+      items86Last7d: Number(row.items_86_last_7d || 0),
+      stockoutFlag: Boolean(row.stockout_flag),
+      latestForecastQty: row.latest_forecast_qty === null || row.latest_forecast_qty === undefined ? null : Number(row.latest_forecast_qty),
+      latestBaseForecastQty: row.latest_base_forecast_qty === null || row.latest_base_forecast_qty === undefined ? null : Number(row.latest_base_forecast_qty)
+    });
+  });
+  return map;
+}
+
+function computeLiveMlPrediction(model, featureRow, context) {
+  const featureSpec = model?.featureSpec || {};
+  const categories = Array.isArray(featureSpec.categories) ? featureSpec.categories.map(normalizeItemKey) : [];
+  const weatherBuckets = Array.isArray(featureSpec.weatherBuckets) ? featureSpec.weatherBuckets.map(normalizeItemKey) : [];
+  const means = Array.isArray(featureSpec.standardizer?.means) ? featureSpec.standardizer.means.map((value) => Number(value)) : [];
+  const stdDevs = Array.isArray(featureSpec.standardizer?.stdDevs) ? featureSpec.standardizer.stdDevs.map((value) => Number(value) || 1) : [];
+  const weights = Array.isArray(featureSpec.weights) ? featureSpec.weights.map((value) => Number(value)) : [];
+  if (!means.length || means.length !== stdDevs.length || weights.length !== means.length + 1) {
+    return null;
+  }
+
+  const safeFeatureRow = featureRow || {};
+  const baselineQty = Math.max(
+    1,
+    firstPositiveNumber([
+      context.ruleBasePredicted,
+      safeFeatureRow.latestBaseForecastQty,
+      safeFeatureRow.latestForecastQty,
+      safeFeatureRow.avgQty7d,
+      safeFeatureRow.avgQty28d,
+      safeFeatureRow.lagQty7d,
+      safeFeatureRow.avgQtySameWeekday4w,
+      safeFeatureRow.lagQty1d
+    ], 1)
+  );
+  const avgPrice = Math.max(0, Number(safeFeatureRow.avgPrice || context.avgPrice || 0));
+  const revenueScale = Math.max(Number(safeFeatureRow.rollingRevenue7d || 0), baselineQty * Math.max(avgPrice, 1));
+  const categoryKey = normalizeItemKey(safeFeatureRow.itemCategory || context.itemCategory || 'uncategorized');
+  const weatherKey = normalizeItemKey(context.weatherBucket || 'unknown');
+  const dayRadians = ((Math.max(1, context.dayOfWeek) - 1) / 7) * Math.PI * 2;
+  const monthRadians = ((Math.max(1, context.monthOfYear) - 1) / 12) * Math.PI * 2;
+
+  const rawValues = [
+    Math.log1p(baselineQty),
+    Number(safeFeatureRow.lagQty1d || 0) / baselineQty,
+    Number(safeFeatureRow.lagQty7d || 0) / baselineQty,
+    Number(safeFeatureRow.avgQty7d || 0) / baselineQty,
+    Number(safeFeatureRow.avgQty14d || 0) / baselineQty,
+    Number(safeFeatureRow.avgQty28d || 0) / baselineQty,
+    Number(safeFeatureRow.avgQtySameWeekday4w || 0) / baselineQty,
+    Number(context.ruleBasePredicted || 0) / baselineQty,
+    avgPrice,
+    Number(context.learningMultiplier || safeFeatureRow.learningMultiplier || 1),
+    Number(context.learningSamples || safeFeatureRow.learningSamples || 0) / 25,
+    Number(safeFeatureRow.aiRecent7dRate || 0),
+    Number(safeFeatureRow.prepDaysLast7d || 0) / 7,
+    Number(safeFeatureRow.wasteValueLast7d || 0) / Math.max(revenueScale, 1),
+    Number(safeFeatureRow.items86Last7d || 0) / 7,
+    context.tempC === null || context.tempC === undefined ? 0 : Number(context.tempC) / 30,
+    context.isWeekend ? 1 : 0,
+    context.isHoliday ? 1 : 0,
+    (context.stockoutFlag || safeFeatureRow.stockoutFlag) ? 1 : 0,
+    Math.sin(dayRadians),
+    Math.cos(dayRadians),
+    Math.sin(monthRadians),
+    Math.cos(monthRadians),
+    ...categories.map((bucket) => (bucket === categoryKey ? 1 : 0)),
+    ...weatherBuckets.map((bucket) => (bucket === weatherKey ? 1 : 0))
+  ];
+
+  if (rawValues.length !== means.length) return null;
+
+  const standardized = rawValues.map((value, index) => (Number(value || 0) - means[index]) / (stdDevs[index] || 1));
+  const predictedMultiplier = clampNumber(
+    [1, ...standardized].reduce((sum, value, index) => sum + value * (weights[index] || 0), 0),
+    0,
+    4.5
+  );
+  const predictedQty = Math.max(0, Math.round(predictedMultiplier * baselineQty));
+  const appliedMultiplier = context.ruleBasePredicted > 0
+    ? clampNumber(predictedQty / context.ruleBasePredicted, 0, 4.5)
+    : predictedMultiplier;
+  const featureCoverage = averageNumbers([
+    safeFeatureRow.lagQty1d > 0 ? 1 : 0,
+    safeFeatureRow.lagQty7d > 0 ? 1 : 0,
+    safeFeatureRow.avgQty7d > 0 ? 1 : 0,
+    safeFeatureRow.avgQty28d > 0 ? 1 : 0,
+    context.ruleBasePredicted > 0 ? 1 : 0,
+    (context.learningSamples || safeFeatureRow.learningSamples || 0) > 0 ? 1 : 0
+  ]);
+  const confidenceScore = clampNumber(
+    0.35
+      + (featureCoverage * 0.5)
+      + (Math.min((context.learningSamples || safeFeatureRow.learningSamples || 0) / 15, 1) * 0.15),
+    0.05,
+    0.99
+  );
+
+  return {
+    modelVersionId: Number(model.id),
+    modelKey: model.model_key,
+    displayName: model.display_name,
+    predictedQty,
+    predictedMultiplier: Math.round(predictedMultiplier * 10000) / 10000,
+    appliedMultiplier: Math.round(appliedMultiplier * 10000) / 10000,
+    confidenceScore: Math.round(confidenceScore * 10000) / 10000,
+    featureCoverage: Math.round(featureCoverage * 10000) / 10000
+  };
 }
 
 async function syncForecastActualsFromTransactions(client, cafeId, targetDate) {
@@ -124,6 +345,7 @@ async function rebuildItemLearningState(client, cafeId, targetDate) {
           AND fia.actual_qty IS NOT NULL
           AND fia.predicted_qty > 0
           AND fia.ai_applied = false
+          AND COALESCE(fia.ml_applied, false) = false
       ),
       agg AS (
         SELECT
@@ -216,13 +438,17 @@ async function saveItemForecastSnapshot(client, cafeId, targetDate, predictions,
           weather_modifier,
           holiday_modifier,
           learning_multiplier,
+          ml_multiplier,
+          ml_applied,
+          ml_model_version_id,
+          forecast_source,
           ai_multiplier,
           ai_applied,
           created_at,
           updated_at
         )
         VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW()
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),NOW()
         )
         ON CONFLICT (cafe_id, forecast_date, item_id)
         DO UPDATE SET
@@ -234,6 +460,10 @@ async function saveItemForecastSnapshot(client, cafeId, targetDate, predictions,
           weather_modifier = EXCLUDED.weather_modifier,
           holiday_modifier = EXCLUDED.holiday_modifier,
           learning_multiplier = EXCLUDED.learning_multiplier,
+          ml_multiplier = EXCLUDED.ml_multiplier,
+          ml_applied = EXCLUDED.ml_applied,
+          ml_model_version_id = EXCLUDED.ml_model_version_id,
+          forecast_source = EXCLUDED.forecast_source,
           ai_multiplier = EXCLUDED.ai_multiplier,
           ai_applied = EXCLUDED.ai_applied,
           updated_at = NOW();
@@ -250,6 +480,10 @@ async function saveItemForecastSnapshot(client, cafeId, targetDate, predictions,
         itemPrediction.weatherMod,
         itemPrediction.holidayModifier,
         itemPrediction.learningMultiplier || 1,
+        itemPrediction.mlMultiplier || 1,
+        Boolean(itemPrediction.mlApplied),
+        itemPrediction.mlModelVersionId || null,
+        itemPrediction.forecastSource || 'rules',
         itemPrediction.aiMultiplier || 1,
         aiApplied
       ]
@@ -267,11 +501,17 @@ async function generateForecast(cafeId, targetDate, options = {}) {
 
     let learningEnabled = cafeData.learning_enabled !== false;
     let learningByItemId = new Map();
+    let activeMlModel = null;
+    let latestMlFeaturesByItemId = new Map();
     try {
       await syncForecastActualsFromTransactions(client, cafeId, targetDate);
       if (learningEnabled) {
         await rebuildItemLearningState(client, cafeId, targetDate);
         learningByItemId = await getLearningStateByItemId(client, cafeId);
+      }
+      activeMlModel = await getActiveMlModelForCafe(client, cafeId);
+      if (activeMlModel) {
+        latestMlFeaturesByItemId = await getLatestMlFeaturesByItemId(client, cafeId, targetDate);
       }
     } catch (err) {
       if (err?.code === '42P01') {
@@ -303,6 +543,10 @@ async function generateForecast(cafeId, targetDate, options = {}) {
         : DAY_MULTIPLIERS[dayName] || 1.0;
 
     const holidayModifier = isHoliday ? getHolidayModifier(holidayBehaviour) : 1.0;
+    const dayOfWeek = date.getDay() === 0 ? 7 : date.getDay();
+    const monthOfYear = date.getMonth() + 1;
+    const isWeekend = dayOfWeek === 6 || dayOfWeek === 7;
+    const weatherBucket = getMlWeatherBucket(weather.condition, weather.temp);
 
     // Get last 28 days of transactions per item (relative to target date first)
     let transactionData = await client.query(
@@ -416,13 +660,49 @@ async function generateForecast(cafeId, targetDate, options = {}) {
         LEARNING_RATIO_MAX
       );
 
-      const basePredicted = Math.round(avgQty * dayMultiplier * weatherMod * holidayModifier * learningMultiplier);
+      const ruleBasePredicted = Math.max(0, Math.round(avgQty * dayMultiplier * weatherMod * holidayModifier * learningMultiplier));
+      const latestMlFeature = latestMlFeaturesByItemId.get(item.id) || {
+        itemCategory: item.category || 'Uncategorized',
+        avgQty7d: avgQty,
+        avgQty14d: avgQty,
+        avgQty28d: avgQty,
+        avgQtySameWeekday4w: avgQty,
+        lagQty1d: avgQty,
+        lagQty7d: avgQty,
+        avgPrice: Number(item.price || 0),
+        learningMultiplier,
+        learningSamples: Number(learningState?.samples || 0),
+        aiRecent7dRate: 0,
+        prepDaysLast7d: 0,
+        wasteValueLast7d: 0,
+        items86Last7d: 0,
+        stockoutFlag: false,
+        latestForecastQty: avgQty,
+        latestBaseForecastQty: avgQty
+      };
+      const liveMlPrediction = activeMlModel
+        ? computeLiveMlPrediction(activeMlModel, latestMlFeature, {
+            ruleBasePredicted,
+            avgPrice: Number(item.price || 0),
+            itemCategory: item.category || 'Uncategorized',
+            learningMultiplier,
+            learningSamples: Number(learningState?.samples || 0),
+            weatherBucket,
+            tempC: weather.temp,
+            isWeekend,
+            isHoliday,
+            stockoutFlag: false,
+            dayOfWeek,
+            monthOfYear
+          })
+        : null;
+      const modelPredicted = liveMlPrediction ? liveMlPrediction.predictedQty : ruleBasePredicted;
 
       predictions[item.name] = {
         itemId: item.id,
         category: item.category,
-        predicted: basePredicted,
-        basePredicted,
+        predicted: modelPredicted,
+        basePredicted: ruleBasePredicted,
         avgQty,
         dayMultiplier,
         weatherMod,
@@ -430,6 +710,14 @@ async function generateForecast(cafeId, targetDate, options = {}) {
         learningMultiplier: Math.round(learningMultiplier * 10000) / 10000,
         learningSamples: Number(learningState?.samples || 0),
         learningRawRatio: learningState?.rawRatio ?? null,
+        mlApplied: Boolean(liveMlPrediction),
+        mlModelVersionId: liveMlPrediction?.modelVersionId || null,
+        mlModelKey: liveMlPrediction?.modelKey || null,
+        mlModelDisplayName: liveMlPrediction?.displayName || null,
+        mlMultiplier: liveMlPrediction?.appliedMultiplier || 1,
+        mlConfidenceScore: liveMlPrediction?.confidenceScore || null,
+        mlFeatureCoverage: liveMlPrediction?.featureCoverage || null,
+        forecastSource: liveMlPrediction ? 'ml' : 'rules',
         aiMultiplier: 1
       };
     }
@@ -527,6 +815,7 @@ async function generateForecast(cafeId, targetDate, options = {}) {
     const predictionValues = Object.values(predictions);
     const itemsWithHistory = predictionValues.filter((p) => (p.learningSamples || 0) > 0).length;
     const itemsAdjusted = predictionValues.filter((p) => Math.abs((p.learningMultiplier || 1) - 1) >= 0.01).length;
+    const itemsUsingMl = predictionValues.filter((p) => p.mlApplied).length;
 
     return {
       cafeId,
@@ -544,6 +833,10 @@ async function generateForecast(cafeId, targetDate, options = {}) {
       },
       learning: {
         enabled: learningEnabled,
+        mlLive: Boolean(activeMlModel),
+        mlModelVersionId: activeMlModel ? Number(activeMlModel.id) : null,
+        mlModelKey: activeMlModel?.model_key || null,
+        mlModelDisplayName: activeMlModel?.display_name || null,
         historyDays: LEARNING_HISTORY_DAYS,
         maxSamplesPerItem: LEARNING_MAX_SAMPLES_PER_ITEM,
         confidenceSamples: LEARNING_CONFIDENCE_SAMPLES,
@@ -551,7 +844,8 @@ async function generateForecast(cafeId, targetDate, options = {}) {
         ratioMax: LEARNING_RATIO_MAX,
         weatherSensitivity: Math.round((Number(cafeData.weather_sensitivity || 1)) * 100) / 100,
         itemsWithHistory,
-        itemsAdjusted
+        itemsAdjusted,
+        itemsUsingMl
       },
       dataWindow: {
         mode: usingFallbackWindow ? 'latest_available_28d' : 'target_relative_28d'

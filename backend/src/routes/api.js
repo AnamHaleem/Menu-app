@@ -1953,6 +1953,83 @@ router.post('/admin/ml/shadow/train', async (req, res) => {
   }
 });
 
+router.post('/admin/ml/shadow/train-fleet', async (req, res) => {
+  try {
+    const actorEmail = getAdminActorEmail(req);
+    const result = await mlTrainingService.trainFleetShadowModels({
+      ...(req.body || {}),
+      requestedBy: actorEmail || 'admin',
+      source: req.body?.source || 'admin_train_fleet'
+    });
+
+    await writeAdminAuditEvent({
+      eventType: 'ml.shadow_train.fleet',
+      severity: 'medium',
+      cafeId: null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `Fleet shadow training finished for ${result.cafesTrained}/${result.cafesAttempted} cafes`,
+      details: result
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ml/live/train', async (req, res) => {
+  try {
+    const actorEmail = getAdminActorEmail(req);
+    const result = await mlTrainingService.trainAndImportShadowModel({
+      ...(req.body || {}),
+      status: req.body?.status || 'active',
+      requestedBy: actorEmail || 'admin',
+      source: req.body?.source || 'admin_train_live'
+    });
+
+    await writeAdminAuditEvent({
+      eventType: 'ml.live_train.run',
+      severity: 'high',
+      cafeId: req.body?.cafeId ? Number(req.body.cafeId) : null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `Trained live model ${result.modelVersion.display_name} and activated it`,
+      details: result
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ml/live/train-fleet', async (req, res) => {
+  try {
+    const actorEmail = getAdminActorEmail(req);
+    const result = await mlTrainingService.trainFleetShadowModels({
+      ...(req.body || {}),
+      status: req.body?.status || 'active',
+      requestedBy: actorEmail || 'admin',
+      source: req.body?.source || 'admin_train_live_fleet'
+    });
+
+    await writeAdminAuditEvent({
+      eventType: 'ml.live_train.fleet',
+      severity: 'high',
+      cafeId: null,
+      actorEmail,
+      actorSource: 'admin_portal',
+      summary: `Live ML training finished for ${result.cafesTrained}/${result.cafesAttempted} cafes`,
+      details: result
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 
 router.post('/admin/ml/model-versions', async (req, res) => {
   try {

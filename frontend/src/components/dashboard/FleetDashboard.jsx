@@ -686,13 +686,13 @@ export default function FleetDashboard({ selectedCafe, onSelectCafe }) {
           <div className="mt-5 rounded-[24px] border border-blue-100 bg-blue-50/70 p-4">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-700">Shadow model performance</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-700">Model performance</p>
                 <p className="mt-1 text-sm text-slate-600">
-                  Compare candidate model predictions against the live rules engine without changing production forecasts.
+                  Compare trained model predictions against the live rules engine and activate models when they are ready to drive production forecasts.
                 </p>
               </div>
               <Badge color={shadowCenter.summary.liftPct > 0 ? 'green' : shadowCenter.summary.modelsCount ? 'amber' : 'gray'}>
-                {shadowCenter.summary.modelsCount ? `${fmtSignedPct(shadowCenter.summary.liftPct)} vs rules` : 'No shadow model imported'}
+                {shadowCenter.summary.modelsCount ? `${fmtSignedPct(shadowCenter.summary.liftPct)} vs rules` : 'No trained model imported'}
               </Badge>
             </div>
 
@@ -700,12 +700,12 @@ export default function FleetDashboard({ selectedCafe, onSelectCafe }) {
               <>
                 <div className="mt-4 grid grid-cols-2 xl:grid-cols-4 gap-3">
                   <div className="rounded-2xl border border-white/70 bg-white px-4 py-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Best shadow model</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Best trained model</p>
                     <p className="mt-2 text-sm font-bold text-slate-950">{shadowCenter.summary.bestModelDisplayName || shadowCenter.summary.bestModelKey}</p>
                     <p className="mt-1 text-xs text-slate-500">{shadowCenter.summary.comparedRows} compared rows</p>
                   </div>
                   <div className="rounded-2xl border border-white/70 bg-white px-4 py-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Shadow error</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Model error</p>
                     <p className="mt-2 text-[28px] leading-none font-bold text-slate-950">{fmtPct(shadowCenter.summary.mlAvgAbsErrorPct)}</p>
                     <p className="mt-1 text-xs text-slate-500">Confidence {fmtPct(shadowCenter.summary.avgConfidenceScore * 100)}</p>
                   </div>
@@ -717,7 +717,7 @@ export default function FleetDashboard({ selectedCafe, onSelectCafe }) {
                   <div className="rounded-2xl border border-white/70 bg-white px-4 py-3">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Latest import</p>
                     <p className="mt-2 text-sm font-bold text-slate-950">{fmtDateTime(shadowCenter.summary.latestImportedAt)}</p>
-                    <p className="mt-1 text-xs text-slate-500">{shadowCenter.summary.shadowModelsCount} shadow-ready model(s)</p>
+                    <p className="mt-1 text-xs text-slate-500">{shadowCenter.summary.shadowModelsCount} active or shadow model(s)</p>
                   </div>
                 </div>
 
@@ -766,9 +766,9 @@ export default function FleetDashboard({ selectedCafe, onSelectCafe }) {
               </>
             ) : (
               <div className="mt-4 rounded-2xl border border-dashed border-blue-200 bg-white px-4 py-5">
-                <p className="text-sm font-semibold text-slate-900">No shadow models imported yet</p>
+                <p className="text-sm font-semibold text-slate-900">No trained models imported yet</p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Once your training script produces candidate predictions, import them through the admin ML shadow endpoint and we’ll compare them against live rule-based forecasts here.
+                  Train a model from the feature store, import or activate it, and we’ll compare it against the live rules engine here.
                 </p>
               </div>
             )}

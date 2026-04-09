@@ -484,6 +484,26 @@ const migrate = async () => {
     `);
 
     await client.query(`
+      ALTER TABLE forecast_item_actuals
+      ADD COLUMN IF NOT EXISTS ml_applied BOOLEAN NOT NULL DEFAULT false;
+    `);
+
+    await client.query(`
+      ALTER TABLE forecast_item_actuals
+      ADD COLUMN IF NOT EXISTS ml_model_version_id INTEGER REFERENCES ml_model_versions(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE forecast_item_actuals
+      ADD COLUMN IF NOT EXISTS ml_multiplier DECIMAL(10,4) NOT NULL DEFAULT 1;
+    `);
+
+    await client.query(`
+      ALTER TABLE forecast_item_actuals
+      ADD COLUMN IF NOT EXISTS forecast_source VARCHAR(32) NOT NULL DEFAULT 'rules';
+    `);
+
+    await client.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_forecast_item_actuals_unique
       ON forecast_item_actuals (cafe_id, forecast_date, item_id);
     `);

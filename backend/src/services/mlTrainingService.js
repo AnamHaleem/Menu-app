@@ -558,6 +558,9 @@ async function trainAndImportShadowModel(options = {}) {
   });
 
   const quality = summarizePredictionQuality(evaluationPreview);
+  const scope = options.cafeId
+    ? { type: 'cafe', cafeId: Number(options.cafeId) }
+    : { type: 'fleet' };
   const modelKey = String(
     options.modelKey ||
     `linear-shadow-v1-${options.cafeId ? `cafe-${options.cafeId}` : 'fleet'}-${split.evaluationStartDate}-to-${split.evaluationEndDate}`
@@ -569,6 +572,7 @@ async function trainAndImportShadowModel(options = {}) {
 
   const featureSpec = {
     ...modelSpec,
+    scope,
     ridgeLambda: DEFAULT_RIDGE_LAMBDA,
     standardizer: {
       means: standardizer.means.map((value) => roundNumber(value, 8)),
@@ -590,7 +594,8 @@ async function trainAndImportShadowModel(options = {}) {
     trainingStartDate: split.trainingStartDate,
     trainingEndDate: split.trainingEndDate,
     evaluationStartDate: split.evaluationStartDate,
-    evaluationEndDate: split.evaluationEndDate
+    evaluationEndDate: split.evaluationEndDate,
+    scope
   };
 
   const importResult = await mlShadowService.importShadowPredictions({
@@ -634,6 +639,70 @@ async function trainAndImportShadowModel(options = {}) {
   };
 }
 
+async function trainFleetShadowModels(options = {}) {
+  const result = await pool.query(
+    `
+      SELECT id, name
+      FROM cafes
+      WHERE active = true
+      ORDER BY name ASC
+    `
+  );
+
+  const cafes = result.rows.map((row) => ({
+    cafeId: Number(row.id),
+    cafeName: row.name
+  }));
+
+  if (!cafes.length) {
+    throw createHttpError(400, 'No active cafes found to train');
+  }
+
+  const successful = [];
+  const failed = [];
+
+  for (const cafe of cafes) {
+    try {
+      const trained = await trainAndImportShadowModel({
+        ...options,
+        cafeId: cafe.cafeId,
+        modelKey: options.modelKey
+          ? `${String(options.modelKey).trim()}-cafe-${cafe.cafeId}`
+          : `linear-shadow-v1-cafe-${cafe.cafeId}`,
+        displayName: options.displayName
+          ? `${String(options.displayName).trim()} - ${cafe.cafeName}`
+          : `Linear Shadow v1 - ${cafe.cafeName}`,
+        source: options.source || 'admin_train_fleet'
+      });
+
+      successful.push({
+        cafeId: cafe.cafeId,
+        cafeName: cafe.cafeName,
+        modelVersionId: trained.modelVersion.id,
+        modelKey: trained.modelVersion.model_key,
+        predictionsWritten: trained.predictionsWritten,
+        metrics: trained.metrics,
+        split: trained.split
+      });
+    } catch (error) {
+      failed.push({
+        cafeId: cafe.cafeId,
+        cafeName: cafe.cafeName,
+        error: error.message || String(error)
+      });
+    }
+  }
+
+  return {
+    cafesAttempted: cafes.length,
+    cafesTrained: successful.length,
+    cafesFailed: failed.length,
+    successful,
+    failed
+  };
+}
+
 module.exports = {
-  trainAndImportShadowModel
+  trainAndImportShadowModel,
+  trainFleetShadowModels
 };
