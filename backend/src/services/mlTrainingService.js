@@ -477,8 +477,11 @@ function summarizePredictionQuality(rows = []) {
   const ruleErrors = [];
 
   rows.forEach((row) => {
-    if (Number.isFinite(row.ml_abs_error_pct)) mlErrors.push(row.ml_abs_error_pct);
-    if (Number.isFinite(row.rule_abs_error_pct)) ruleErrors.push(row.rule_abs_error_pct);
+    const mlError = row.mlAbsErrorPct ?? row.ml_abs_error_pct;
+    const ruleError = row.ruleAbsErrorPct ?? row.rule_abs_error_pct;
+
+    if (Number.isFinite(mlError)) mlErrors.push(mlError);
+    if (Number.isFinite(ruleError)) ruleErrors.push(ruleError);
   });
 
   const mlAvgAbsErrorPct = roundNumber(average(mlErrors), 2);

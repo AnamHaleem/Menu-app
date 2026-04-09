@@ -1074,6 +1074,69 @@ function ensureAnalyticsDateRange(options = {}, fallbackDays = 30) {
   };
 }
 
+async function resolveAdminHqAnalyticsDateRange(options = {}, cafeIds = []) {
+  const hasExplicitStart = Boolean(normalizeIsoDate(options.startDate));
+  const hasExplicitEnd = Boolean(normalizeIsoDate(options.endDate));
+
+  if (hasExplicitStart || hasExplicitEnd || !cafeIds.length) {
+    return ensureAnalyticsDateRange(options, 30);
+  }
+
+  const result = await pool.query(
+    `
+      WITH source_dates AS (
+        SELECT t.date::date AS date_value
+        FROM transactions t
+        WHERE t.cafe_id = ANY($1::int[])
+
+        UNION ALL
+
+        SELECT dl.date::date AS date_value
+        FROM daily_logs dl
+        WHERE dl.cafe_id = ANY($1::int[])
+
+        UNION ALL
+
+        SELECT pl.date::date AS date_value
+        FROM prep_lists pl
+        WHERE pl.cafe_id = ANY($1::int[])
+
+        UNION ALL
+
+        SELECT fia.forecast_date::date AS date_value
+        FROM forecast_item_actuals fia
+        WHERE fia.cafe_id = ANY($1::int[])
+
+        UNION ALL
+
+        SELECT mp.prediction_date::date AS date_value
+        FROM ml_predictions mp
+        WHERE mp.cafe_id = ANY($1::int[])
+      )
+      SELECT
+        MIN(date_value)::text AS start_date,
+        MAX(date_value)::text AS end_date
+      FROM source_dates
+    `,
+    [cafeIds]
+  );
+
+  const inferredStart = normalizeIsoDate(result.rows[0]?.start_date);
+  const inferredEnd = normalizeIsoDate(result.rows[0]?.end_date);
+
+  if (!inferredStart || !inferredEnd) {
+    return ensureAnalyticsDateRange(options, 30);
+  }
+
+  return {
+    startDate: inferredStart,
+    endDate: inferredEnd,
+    label: formatRangeDateLabel(inferredStart) && formatRangeDateLabel(inferredEnd)
+      ? `${formatRangeDateLabel(inferredStart)} – ${formatRangeDateLabel(inferredEnd)}`
+      : (formatRangeDateLabel(inferredStart) || formatRangeDateLabel(inferredEnd) || 'All time')
+  };
+}
+
 function mapRowsByCafeId(rows = [], key = 'cafe_id') {
   const map = new Map();
   for (const row of rows) {
@@ -1405,16 +1468,6 @@ async function getOwnerContactsForCafe(cafeId) {
 
 async function buildAdminHqSnapshot(options = {}) {
   const selectedCafeId = Number(options.selectedCafeId) || null;
-  const range = ensureAnalyticsDateRange(options, 30);
-  const rangeDayCount = Math.max(
-    1,
-    Math.floor(
-      (
-        new Date(`${range.endDate}T12:00:00`).getTime() -
-        new Date(`${range.startDate}T12:00:00`).getTime()
-      ) / 86400000
-    ) + 1
-  );
 
   const cafesResult = await pool.query(
     `SELECT
@@ -1431,6 +1484,18 @@ async function buildAdminHqSnapshot(options = {}) {
   );
 
   const cafes = cafesResult.rows;
+  const cafeIds = cafes.map((cafe) => cafe.id);
+  const range = await resolveAdminHqAnalyticsDateRange(options, cafeIds);
+  const rangeDayCount = Math.max(
+    1,
+    Math.floor(
+      (
+        new Date(`${range.endDate}T12:00:00`).getTime() -
+        new Date(`${range.startDate}T12:00:00`).getTime()
+      ) / 86400000
+    ) + 1
+  );
+
   if (!cafes.length) {
     return {
       range,
@@ -1504,8 +1569,6 @@ async function buildAdminHqSnapshot(options = {}) {
       auditTrail: []
     };
   }
-
-  const cafeIds = cafes.map((cafe) => cafe.id);
   const today = isoDateFromDate(new Date());
 
   const [
