@@ -125,6 +125,14 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
     setLogForm({ waste_value: '', items_86d: '', actual_covers: '', notes: '' });
   };
 
+  const safeCheckInDate = normalizeLogDate(checkInRequest.logDate);
+  const parsedCheckInDate = safeCheckInDate ? new Date(`${safeCheckInDate}T12:00:00`) : null;
+  const checkInDateLabel = !safeCheckInDate
+    ? 'today'
+    : Number.isNaN(parsedCheckInDate?.getTime?.())
+      ? safeCheckInDate
+      : parsedCheckInDate.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' });
+
   if (loading) return <Spinner />;
 
   const last42 = logs.slice(0, 42).reverse();
@@ -179,13 +187,6 @@ export default function OwnerDashboard({ cafeId, cafeName, dataApi = null }) {
     .sort((a, b) => Math.abs(b.multiplier - 1) - Math.abs(a.multiplier - 1))
     .slice(0, 6);
   const analysisLabel = metrics?.range?.label || formatDateRangeLabel(dateRange.startDate, dateRange.endDate);
-  const checkInDateLabel = useMemo(() => {
-    const safeDate = normalizeLogDate(checkInRequest.logDate);
-    if (!safeDate) return 'today';
-    const parsed = new Date(`${safeDate}T12:00:00`);
-    if (Number.isNaN(parsed.getTime())) return safeDate;
-    return parsed.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' });
-  }, [checkInRequest.logDate]);
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
